@@ -91,7 +91,7 @@ class _SubjectInfoBlockState extends State<SubjectInfoBlock> {
                         border: const OutlineInputBorder(),
                       ),
                       onChanged: (v) {
-                        vm.updateSubjectInfo(f.key, v);
+                        vm.updateSubjectInfoValue(f.key, v);
                         if (_errors.isNotEmpty) {
                           setState(() => _errors = _validate(vm));
                         }

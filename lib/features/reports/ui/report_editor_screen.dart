@@ -1,10 +1,10 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../domain/models/nodes.dart';
 import '../domain/models/report_doc.dart';
-import '../domain/models/subject_info_def.dart';
 import '../providers/report_editor_provider.dart';
 import '../services/image_services.dart';
 import 'report_preview_screen.dart';
@@ -18,7 +18,7 @@ class ReportEditorScreen extends StatefulWidget {
 }
 
 class _ReportEditorScreenState extends State<ReportEditorScreen> {
-  // Controllers for Subject Info values (keeps typing stable)
+  // Keeps typing stable for Subject Info values.
   final Map<String, TextEditingController> _subjectControllers = {};
   Map<String, String> _subjectErrors = {};
 
@@ -38,41 +38,30 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   }
 
   void _syncSubjectControllers(ReportEditorProvider vm) {
-    final def = vm.subjectInfoDef;
-
-    // Ensure controllers exist for all current fields
-    for (final f in def.fields) {
+    for (final f in vm.subjectInfoDef.orderedFields) {
       final current = vm.subjectInfoValues.valueOf(f.key);
       final c = _controllerFor(f.key, current);
       if (c.text != current) c.text = current;
-    }
-
-    // Dispose controllers that no longer exist (field removed)
-    final keysInDef = def.fields.map((e) => e.key).toSet();
-    final keysToRemove = _subjectControllers.keys.where((k) => !keysInDef.contains(k)).toList();
-    for (final k in keysToRemove) {
-      _subjectControllers[k]?.dispose();
-      _subjectControllers.remove(k);
-      _subjectErrors.remove(k);
     }
   }
 
   Map<String, String> _validateSubjectInfo(ReportEditorProvider vm) {
     final def = vm.subjectInfoDef;
+    final values = vm.subjectInfoValues;
 
     final errors = <String, String>{};
     if (!def.enabled) return errors;
 
-    for (final f in def.fields) {
+    for (final f in def.orderedFields) {
       if (!f.required) continue;
-      final v = vm.subjectInfoValues.valueOf(f.key).trim();
+      final v = values.valueOf(f.key).trim();
       if (v.isEmpty) errors[f.key] = 'Required';
     }
     return errors;
   }
 
-  Future<void> _addSubjectFieldDialog(BuildContext context, ReportEditorProvider vm) async {
-    final titleC = TextEditingController();
+  Future<void> _addSubjectFieldDialog(ReportEditorProvider vm) async {
+    final title = TextEditingController();
     bool required = false;
 
     final res = await showDialog<bool>(
@@ -83,174 +72,59 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: titleC,
+              controller: title,
               decoration: const InputDecoration(
-                labelText: 'Field name (e.g. Address)',
+                labelText: 'Field title (e.g., Address)',
                 border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 12),
-            StatefulBuilder(
-              builder: (context, setLocal) => CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: required,
-                onChanged: (v) => setLocal(() => required = v ?? false),
-                title: const Text('Required'),
-              ),
+            CheckboxListTile(
+              value: required,
+              onChanged: (v) => setState(() => required = v ?? false),
+              title: const Text('Required'),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
             ),
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final title = titleC.text.trim();
-              if (title.isEmpty) return;
-              vm.addSubjectField(title: title, required: required);
-              Navigator.pop(context, true);
-            },
-            child: const Text('Add'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add')),
         ],
       ),
     );
 
-    titleC.dispose();
+    title.dispose();
 
-    if (res == true) {
-      // Revalidate if needed
-      if (_subjectErrors.isNotEmpty) {
-        setState(() => _subjectErrors = _validateSubjectInfo(vm));
-      }
-    }
+    if (res != true) return;
+
+    vm.addSubjectField(
+      title: title.text.trim().isEmpty ? 'New field' : title.text.trim(),
+      required: required,
+    );
   }
 
-  void _manageSubjectFieldsSheet(BuildContext context, ReportEditorProvider vm) {
-    showModalBottomSheet<void>(
+  Future<void> _editSubjectFieldsSheet(ReportEditorProvider vm) async {
+    await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            child: Consumer<ReportEditorProvider>(
-              builder: (context, p, __) {
-                final def = p.subjectInfoDef;
-                final fields = [...def.fields]..sort((a, b) => a.order.compareTo(b.order));
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text('Manage Subject Fields'),
-                      subtitle: Text('Rename, mark required, or delete custom fields'),
-                    ),
-                    const SizedBox(height: 6),
-                    Flexible(
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: fields.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
-                        itemBuilder: (_, i) {
-                          final f = fields[i];
-                          return ListTile(
-                            title: Text(f.title),
-                            subtitle: Text(f.isSystem ? 'System field' : 'Custom field'),
-                            leading: Icon(f.isSystem ? Icons.lock_outline : Icons.edit_note),
-                            trailing: Wrap(
-                              spacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Text('Req'),
-                                    Checkbox(
-                                      value: f.required,
-                                      onChanged: (v) => p.toggleSubjectFieldRequired(f.key, v ?? false),
-                                    ),
-                                  ],
-                                ),
-                                IconButton(
-                                  tooltip: 'Rename',
-                                  icon: const Icon(Icons.edit),
-                                  onPressed: () async {
-                                    final c = TextEditingController(text: f.title);
-                                    final ok = await showDialog<bool>(
-                                      context: context,
-                                      builder: (_) => AlertDialog(
-                                        title: const Text('Rename field'),
-                                        content: TextField(
-                                          controller: c,
-                                          decoration: const InputDecoration(
-                                            border: OutlineInputBorder(),
-                                          ),
-                                        ),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.pop(context, false),
-                                            child: const Text('Cancel'),
-                                          ),
-                                          FilledButton(
-                                            onPressed: () {
-                                              final t = c.text.trim();
-                                              if (t.isEmpty) return;
-                                              p.renameSubjectField(f.key, t);
-                                              Navigator.pop(context, true);
-                                            },
-                                            child: const Text('Save'),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                    c.dispose();
-                                    if (ok == true && _subjectErrors.isNotEmpty) {
-                                      setState(() => _subjectErrors = _validateSubjectInfo(vm));
-                                    }
-                                  },
-                                ),
-                                if (!f.isSystem)
-                                  IconButton(
-                                    tooltip: 'Delete',
-                                    icon: const Icon(Icons.delete_outline),
-                                    onPressed: () => p.removeSubjectField(f.key),
-                                  ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Done'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-        );
-      },
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: _SubjectFieldsEditor(vm: vm),
+        ),
+      ),
     );
+
+    if (!mounted) return;
+    setState(() => _subjectErrors = _validateSubjectInfo(vm));
   }
 
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<ReportEditorProvider>();
-
     _syncSubjectControllers(vm);
 
     return Scaffold(
@@ -272,7 +146,9 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
               await vm.save();
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Saved')));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Saved')),
+              );
             },
           ),
           IconButton(
@@ -314,7 +190,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                       padding: EdgeInsets.symmetric(vertical: 18),
                       child: Text('No sections yet. Tap Add → Add section.'),
                     ),
-                  ...vm.doc.roots.map((s) => _sectionWidget(context, vm, s, depth: 0)),
+                  ...vm.doc.roots.map((s) => _sectionWidget(context, vm, s)),
                 ],
               ),
             ),
@@ -324,46 +200,33 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             const SizedBox(height: 12),
 
             _card(
-              title: 'Recommendation',
-              child: TextField(
-                minLines: 2,
-                maxLines: 6,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText: 'Enter recommendation…',
-                ),
-                onChanged: (v) {
-                  // vm.updateRecommendation(v);
-                },
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            _card(
               title: 'Signer',
               child: Column(
                 children: [
                   TextField(
                     decoration: const InputDecoration(
-                      labelText: 'Title (e.g. Radiologist / Endoscopist / Reporter)',
+                      labelText: 'Title (e.g., Reporter, Endoscopist, Radiologist)',
                       border: OutlineInputBorder(),
                     ),
+                    controller: TextEditingController(text: vm.doc.signature.roleTitle)
+                      ..selection = TextSelection.collapsed(offset: vm.doc.signature.roleTitle.length),
                     onChanged: (v) => vm.updateSigner(roleTitle: v),
                   ),
                   const SizedBox(height: 10),
                   TextField(
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder()),
+                    controller: TextEditingController(text: vm.doc.signature.name)
+                      ..selection = TextSelection.collapsed(offset: vm.doc.signature.name.length),
                     onChanged: (v) => vm.updateSigner(name: v),
                   ),
                   const SizedBox(height: 10),
                   TextField(
                     decoration: const InputDecoration(
-                      labelText: 'Credentials',
+                      labelText: 'Credentials (optional)',
                       border: OutlineInputBorder(),
                     ),
+                    controller: TextEditingController(text: vm.doc.signature.credentials)
+                      ..selection = TextSelection.collapsed(offset: vm.doc.signature.credentials.length),
                     onChanged: (v) => vm.updateSigner(credentials: v),
                   ),
                   const SizedBox(height: 10),
@@ -392,7 +255,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                       borderRadius: BorderRadius.circular(12),
                       child: Image.file(
                         File(vm.doc.signature.signatureFilePath!),
-                        height: 100,
+                        height: 110,
                         fit: BoxFit.contain,
                       ),
                     ),
@@ -410,9 +273,22 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
   Widget _subjectInfoCard(ReportEditorProvider vm) {
     final def = vm.subjectInfoDef;
-    if (!def.enabled) return const SizedBox.shrink();
+    if (!def.enabled) {
+      return _card(
+        title: 'Subject Info',
+        child: Row(
+          children: [
+            const Expanded(child: Text('Subject Info is disabled.')),
+            FilledButton(
+              onPressed: () => vm.setSubjectInfoEnabled(true),
+              child: const Text('Enable'),
+            ),
+          ],
+        ),
+      );
+    }
 
-    final fields = [...def.fields]..sort((a, b) => a.order.compareTo(b.order));
+    final fields = def.orderedFields;
 
     final fieldWidgets = fields.map((f) {
       final current = vm.subjectInfoValues.valueOf(f.key);
@@ -429,7 +305,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             border: const OutlineInputBorder(),
           ),
           onChanged: (v) {
-            vm.updateSubjectInfo(f.key, v);
+            vm.updateSubjectInfoValue(f.key, v);
             if (_subjectErrors.isNotEmpty) {
               setState(() => _subjectErrors = _validateSubjectInfo(vm));
             }
@@ -445,6 +321,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           final half = (c.maxWidth - 12) / 2;
           return Wrap(
             spacing: 12,
+            runSpacing: 0,
             children: fieldWidgets.map((w) => SizedBox(width: half, child: w)).toList(),
           );
         },
@@ -458,11 +335,13 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Top controls row
           Row(
             children: [
-              const Text('Layout:'),
-              const SizedBox(width: 10),
+              Switch(
+                value: def.enabled,
+                onChanged: vm.setSubjectInfoEnabled,
+              ),
+              const SizedBox(width: 6),
               SegmentedButton<int>(
                 segments: const [
                   ButtonSegment(value: 1, label: Text('1 col')),
@@ -473,29 +352,20 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
               ),
               const Spacer(),
               OutlinedButton.icon(
-                onPressed: () => _addSubjectFieldDialog(context, vm),
-                icon: const Icon(Icons.add),
-                label: const Text('Add field'),
+                onPressed: () => _editSubjectFieldsSheet(vm),
+                icon: const Icon(Icons.tune),
+                label: const Text('Fields'),
               ),
               const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () => _manageSubjectFieldsSheet(context, vm),
-                icon: const Icon(Icons.tune),
-                label: const Text('Manage'),
+              FilledButton.icon(
+                onPressed: () => _addSubjectFieldDialog(vm),
+                icon: const Icon(Icons.add),
+                label: const Text('Add field'),
               ),
             ],
           ),
           const SizedBox(height: 12),
-
           body,
-
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: () => setState(() => _subjectErrors = _validateSubjectInfo(vm)),
-              child: const Text('Validate'),
-            ),
-          ),
         ],
       ),
     );
@@ -616,12 +486,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     );
   }
 
-  Widget _sectionWidget(
-    BuildContext context,
-    ReportEditorProvider vm,
-    SectionNode section, {
-    required int depth,
-  }) {
+  Widget _sectionWidget(BuildContext context, ReportEditorProvider vm, SectionNode section) {
     final indent = (section.indent) * 16.0;
     final selected = vm.selectedNodeId == section.id;
     final hasChildren = section.children.isNotEmpty;
@@ -695,6 +560,8 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                       child: Padding(
                         padding: const EdgeInsets.all(6),
                         child: TextField(
+                          controller: TextEditingController(text: child.text)
+                            ..selection = TextSelection.collapsed(offset: child.text.length),
                           minLines: 2,
                           maxLines: 6,
                           decoration: const InputDecoration(
@@ -708,7 +575,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                   ),
                 );
               }
-              if (child is SectionNode) return _sectionWidget(context, vm, child, depth: depth + 1);
+              if (child is SectionNode) return _sectionWidget(context, vm, child);
               return const SizedBox.shrink();
             }),
         ],
@@ -733,7 +600,113 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   }
 }
 
-// ---------------- section edit sheet ----------------
+// ---------------- Subject Fields Editor ----------------
+
+class _SubjectFieldsEditor extends StatefulWidget {
+  final ReportEditorProvider vm;
+  const _SubjectFieldsEditor({required this.vm});
+
+  @override
+  State<_SubjectFieldsEditor> createState() => _SubjectFieldsEditorState();
+}
+
+class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
+  void _renameDialog(String fieldKey, String currentTitle) {
+    final c = TextEditingController(text: currentTitle);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Rename field'),
+        content: TextField(
+          controller: c,
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final t = c.text.trim().isEmpty ? currentTitle : c.text.trim();
+              widget.vm.renameSubjectField(fieldKey, t);
+              Navigator.pop(context);
+              setState(() {});
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    ).then((_) => c.dispose());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = widget.vm;
+    final fields = vm.subjectInfoDef.orderedFields;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const ListTile(
+          title: Text('Subject Fields'),
+          subtitle: Text('Add, rename, reorder, set required.'),
+        ),
+        Flexible(
+          child: ReorderableListView.builder(
+            shrinkWrap: true,
+            itemCount: fields.length,
+            onReorder: (oldIndex, newIndex) {
+              vm.reorderSubjectFields(oldIndex, newIndex);
+              setState(() {});
+            },
+            itemBuilder: (_, i) {
+              final f = fields[i];
+              return ListTile(
+                key: ValueKey(f.key),
+                title: Text(f.title),
+                subtitle: Text(f.isSystem ? 'System field' : 'Custom field'),
+                leading: const Icon(Icons.drag_handle),
+                trailing: Wrap(
+                  spacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Checkbox(
+                      value: f.required,
+                      onChanged: (v) {
+                        vm.toggleSubjectRequired(f.key, v ?? false);
+                        setState(() {});
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Rename',
+                      icon: const Icon(Icons.edit),
+                      onPressed: () => _renameDialog(f.key, f.title),
+                    ),
+                    if (!f.isSystem)
+                      IconButton(
+                        tooltip: 'Delete',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () {
+                          vm.removeSubjectField(f.key);
+                          setState(() {});
+                        },
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------- Section edit sheet ----------------
 
 class _SectionEditResult {
   final String? rename;
@@ -831,7 +804,7 @@ class _SectionEditSheetState extends State<_SectionEditSheet> {
   }
 }
 
-// ---------------- images manager ----------------
+// ---------------- Images Manager ----------------
 
 class _ImagesManager extends StatefulWidget {
   final ReportEditorProvider vm;

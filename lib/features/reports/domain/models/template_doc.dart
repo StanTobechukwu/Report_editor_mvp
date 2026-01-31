@@ -16,7 +16,7 @@ class TemplateDoc {
     required this.name,
     required this.roots,
     SubjectInfoBlockDef? subjectInfo,
-  }) : subjectInfo = subjectInfo ?? SubjectInfoBlockDef.defaults();
+  }) : subjectInfo = subjectInfo ?? SubjectInfoBlockDef.kDefaults;
 
   TemplateDoc copyWith({
     DateTime? updatedAt,

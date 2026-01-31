@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 
 import '../../../core/utils/ids.dart';
@@ -21,10 +23,6 @@ class ReportEditorProvider extends ChangeNotifier {
   /// Selected node can be a SectionNode OR ContentNode id.
   String? _selectedNodeId;
 
-  /// Template-side subject info structure (defs), used by the report screen UI
-  /// to know what fields to render. Values live in ReportDoc.subjectInfo.
-  SubjectInfoBlockDef _subjectInfoDef = SubjectInfoBlockDef.defaults();
-
   ReportEditorProvider({
     required this.repo,
     required this.templatesRepo,
@@ -39,7 +37,8 @@ class ReportEditorProvider extends ChangeNotifier {
   ReportDoc get doc => _doc;
   String? get selectedNodeId => _selectedNodeId;
 
-  SubjectInfoBlockDef get subjectInfoDef => _subjectInfoDef;
+  /// Subject info schema (defs) + values.
+  SubjectInfoBlockDef get subjectInfoDef => _doc.subjectInfoDef;
   SubjectInfoValues get subjectInfoValues => _doc.subjectInfo;
 
   // =========================
@@ -67,6 +66,7 @@ class ReportEditorProvider extends ChangeNotifier {
       images: const [],
       placementChoice: ImagePlacementChoice.attachmentsOnly,
       signature: const SignatureBlock(),
+      subjectInfoDef: SubjectInfoBlockDef.kDefaults,
       subjectInfo: const SubjectInfoValues({}),
     );
   }
@@ -74,22 +74,15 @@ class ReportEditorProvider extends ChangeNotifier {
   void newReport() {
     _doc = _newEmptyDoc();
     _selectedNodeId = null;
-
-    // Default structure for subject info fields (template-like defaults)
-    _subjectInfoDef = SubjectInfoBlockDef.defaults();
-
     notifyListeners();
   }
 
-  /// Use a template to start a report:
+  /// Start report from a template:
   /// - structure from template.roots
-  /// - subject info defs from template.subjectInfo
-  /// - subject info values start empty
+  /// - subjectInfoDef from template.subjectInfo
+  /// - subjectInfo values start empty
   void newReportFromTemplate(TemplateDoc template) {
     final now = nowIso();
-
-    _subjectInfoDef = template.subjectInfo;
-
     _doc = ReportDoc(
       reportId: newId('rpt'),
       createdAtIso: now,
@@ -98,9 +91,9 @@ class ReportEditorProvider extends ChangeNotifier {
       images: const [],
       placementChoice: ImagePlacementChoice.attachmentsOnly,
       signature: const SignatureBlock(),
+      subjectInfoDef: template.subjectInfo,
       subjectInfo: const SubjectInfoValues({}),
     );
-
     _selectedNodeId = null;
     notifyListeners();
   }
@@ -112,35 +105,143 @@ class ReportEditorProvider extends ChangeNotifier {
   }
 
   Future<void> loadById(String reportId) async {
-    final loaded = await repo.loadReport(reportId);
-
-    // Make sure subjectInfo never becomes null (your model already defaults it)
-    _doc = loaded;
-
+    _doc = await repo.loadReport(reportId);
     _selectedNodeId = null;
-
-    // Keep whatever current template defs you’re using.
-    // If you want, you can also load the last-used template here later.
     notifyListeners();
   }
 
-  /// Optional: load a template by id using templatesRepo (if your repo supports it)
   Future<void> loadTemplateAndStartReport(String templateId) async {
     final template = await templatesRepo.loadTemplate(templateId);
     newReportFromTemplate(template);
   }
 
   // =========================
-  // Subject Info (VALUES ONLY)
-  // Subject info is excluded from indent logic by design.
+  // Subject Info (schema + values)
   // =========================
 
-  void updateSubjectInfo(String fieldKey, String value) {
+  void updateSubjectInfoValue(String fieldKey, String value) {
     _doc = _doc.copyWith(
       subjectInfo: _doc.subjectInfo.copyWithValue(fieldKey, value),
       updatedAtIso: nowIso(),
     );
     notifyListeners();
+  }
+
+  void setSubjectInfoEnabled(bool enabled) {
+    _doc = _doc.copyWith(
+      subjectInfoDef: _doc.subjectInfoDef.copyWith(enabled: enabled),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
+
+  void setSubjectInfoColumns(int columns) {
+    _doc = _doc.copyWith(
+      subjectInfoDef: _doc.subjectInfoDef.copyWith(columns: columns),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
+
+  void addSubjectField({String title = 'New field', bool required = false}) {
+    final fields = _doc.subjectInfoDef.fields;
+    final nextOrder = _nextOrder(fields);
+    final key = _generateCustomFieldKey();
+
+    final field = SubjectFieldDef(
+      key: key,
+      title: title.trim().isEmpty ? 'New field' : title.trim(),
+      required: required,
+      order: nextOrder,
+      isSystem: false,
+    );
+
+    _doc = _doc.copyWith(
+      subjectInfoDef: _doc.subjectInfoDef.copyWith(fields: [...fields, field]),
+      subjectInfo: _doc.subjectInfo.copyWithValue(key, ''),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
+
+  void removeSubjectField(String fieldKey) {
+    final fields = _doc.subjectInfoDef.fields;
+    final target = fields.firstWhere((f) => f.key == fieldKey, orElse: () => const SubjectFieldDef(key: '', title: '', required: false, order: 0, isSystem: false));
+    if (target.key.isEmpty) return;
+    if (target.isSystem) return;
+
+    final nextFields = fields.where((f) => f.key != fieldKey).toList();
+
+    final nextValues = Map<String, String>.from(_doc.subjectInfo.values);
+    nextValues.remove(fieldKey);
+
+    _doc = _doc.copyWith(
+      subjectInfoDef: _doc.subjectInfoDef.copyWith(fields: nextFields),
+      subjectInfo: SubjectInfoValues(nextValues),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
+
+  void renameSubjectField(String fieldKey, String title) {
+    final t = title.trim();
+    if (t.isEmpty) return;
+
+    final nextFields = _doc.subjectInfoDef.fields
+        .map((f) => f.key == fieldKey ? f.copyWith(title: t) : f)
+        .toList();
+
+    _doc = _doc.copyWith(
+      subjectInfoDef: _doc.subjectInfoDef.copyWith(fields: nextFields),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
+
+  void toggleSubjectRequired(String fieldKey, bool required) {
+    final nextFields = _doc.subjectInfoDef.fields
+        .map((f) => f.key == fieldKey ? f.copyWith(required: required) : f)
+        .toList();
+
+    _doc = _doc.copyWith(
+      subjectInfoDef: _doc.subjectInfoDef.copyWith(fields: nextFields),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
+
+  void reorderSubjectFields(int oldIndex, int newIndex) {
+    final ordered = [..._doc.subjectInfoDef.orderedFields];
+
+    if (oldIndex < 0 || oldIndex >= ordered.length) return;
+    if (newIndex < 0 || newIndex > ordered.length) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+
+    final item = ordered.removeAt(oldIndex);
+    ordered.insert(newIndex, item);
+
+    final resequenced = <SubjectFieldDef>[];
+    for (int i = 0; i < ordered.length; i++) {
+      resequenced.add(ordered[i].copyWith(order: i));
+    }
+
+    _doc = _doc.copyWith(
+      subjectInfoDef: _doc.subjectInfoDef.copyWith(fields: resequenced),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
+
+  int _nextOrder(List<SubjectFieldDef> fields) {
+    if (fields.isEmpty) return 0;
+    final maxOrder = fields.map((f) => f.order).reduce((a, b) => a > b ? a : b);
+    return maxOrder + 1;
+  }
+
+  String _generateCustomFieldKey() {
+    final r = Random();
+    final chunk = List.generate(8, (_) => r.nextInt(36).toRadixString(36)).join();
+    return 'custom_$chunk';
   }
 
   // =========================
@@ -256,46 +357,36 @@ class ReportEditorProvider extends ChangeNotifier {
 
   // =========================
   // Indent / Outdent nodes
-  // Requires: SectionNode.indent, ContentNode.indent in nodes.dart
   // =========================
 
- // =========================
-// Indent / Outdent nodes
-// =========================
+  void indentNode(String nodeId) => _shiftIndent(nodeId, 1);
+  void outdentNode(String nodeId) => _shiftIndent(nodeId, -1);
 
-void indentNode(String nodeId) => _shiftIndent(nodeId, 1);
-void outdentNode(String nodeId) => _shiftIndent(nodeId, -1);
+  void _shiftIndent(String nodeId, int delta) {
+    int clampIndent(int v) => v.clamp(0, 20);
 
-void _shiftIndent(String nodeId, int delta) {
-  int clampIndent(int v) => v.clamp(0, 20);
+    Node transform(Node n) {
+      if (n.id == nodeId) {
+        if (n is SectionNode) return n.copyWith(indent: clampIndent(n.indent + delta));
+        if (n is ContentNode) return n.copyWith(indent: clampIndent(n.indent + delta));
+      }
 
-  Node transform(Node n) {
-    if (n.id == nodeId) {
       if (n is SectionNode) {
-        return n.copyWith(indent: clampIndent(n.indent + delta));
+        final updatedChildren = n.children.map(transform).toList();
+        return n.copyWith(children: updatedChildren);
       }
-      if (n is ContentNode) {
-        return n.copyWith(indent: clampIndent(n.indent + delta));
-      }
+
+      return n;
     }
 
-    if (n is SectionNode) {
-      final updatedChildren = n.children.map(transform).toList();
-      return n.copyWith(children: updatedChildren);
-    }
+    final updatedRoots = _doc.roots.map((s) => transform(s) as SectionNode).toList();
 
-    return n;
+    _doc = _doc.copyWith(
+      roots: updatedRoots,
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
   }
-
-  final updatedRoots =
-      _doc.roots.map((s) => transform(s) as SectionNode).toList();
-
-  _doc = _doc.copyWith(
-    roots: updatedRoots,
-    updatedAtIso: nowIso(),
-  );
-  notifyListeners();
-}
 
   // =========================
   // Images
@@ -303,9 +394,7 @@ void _shiftIndent(String nodeId, int delta) {
 
   void setPlacementChoice(ImagePlacementChoice choice) {
     if (choice == ImagePlacementChoice.attachmentsOnly && _doc.images.length > 8) {
-      throw Exception(
-        'Attachments-only mode allows max 8 images. Remove some images first.',
-      );
+      throw Exception('Attachments-only mode allows max 8 images. Remove some images first.');
     }
 
     _doc = _doc.copyWith(
@@ -324,8 +413,7 @@ void _shiftIndent(String nodeId, int delta) {
       throw Exception('Maximum of $cap images allowed for this mode.');
     }
 
-    final newImgs =
-        clean.map((p) => ImageAttachment(id: _id('img'), filePath: p)).toList();
+    final newImgs = clean.map((p) => ImageAttachment(id: _id('img'), filePath: p)).toList();
 
     _doc = _doc.copyWith(
       images: [..._doc.images, ...newImgs],
@@ -343,12 +431,16 @@ void _shiftIndent(String nodeId, int delta) {
   }
 
   // =========================
-  // Signature
+  // Signature / Signer
   // =========================
 
-  void updateSigner({String? name, String? credentials}) {
+  void updateSigner({String? roleTitle, String? name, String? credentials}) {
     _doc = _doc.copyWith(
-      signature: _doc.signature.copyWith(name: name, credentials: credentials),
+      signature: _doc.signature.copyWith(
+        roleTitle: roleTitle,
+        name: name,
+        credentials: credentials,
+      ),
       updatedAtIso: nowIso(),
     );
     notifyListeners();

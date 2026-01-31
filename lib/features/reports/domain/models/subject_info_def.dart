@@ -22,7 +22,7 @@ class SubjectFieldDef {
     required this.isSystem,
   });
 
-  // Compatibility with older code that used fieldId
+  /// Compatibility with older UI/provider code that used `fieldId`.
   String get fieldId => key;
 
   SubjectFieldDef copyWith({
@@ -50,7 +50,7 @@ class SubjectFieldDef {
   factory SubjectFieldDef.fromJson(Map<String, dynamic> j) {
     return SubjectFieldDef(
       key: j['key'] as String,
-      title: (j['title'] as String?) ?? '',
+      title: j['title'] as String,
       required: (j['required'] as bool?) ?? false,
       order: (j['order'] as int?) ?? 0,
       isSystem: (j['isSystem'] as bool?) ?? false,
@@ -60,44 +60,47 @@ class SubjectFieldDef {
 
 @immutable
 class SubjectInfoBlockDef {
+  /// Turn Subject Info on/off in the editor + output.
   final bool enabled;
-  final int schemaVersion;
 
-  /// ✅ NEW: persist the column layout (1 or 2)
+  /// 1-col or 2-col layout for editor + preview + pdf.
+  /// Persisted as real data (not computed).
   final int columns;
 
+  final int schemaVersion;
   final List<SubjectFieldDef> fields;
 
   const SubjectInfoBlockDef({
     required this.enabled,
-    required this.schemaVersion,
     required this.columns,
+    required this.schemaVersion,
     required this.fields,
   });
 
-  factory SubjectInfoBlockDef.defaults() {
-    return const SubjectInfoBlockDef(
-      enabled: true,
-      schemaVersion: 1,
-      columns: 2,
-      fields: [
-        SubjectFieldDef(
-          key: SubjectFieldKeys.subjectName,
-          title: 'Subject Name',
-          required: true,
-          order: 0,
-          isSystem: true,
-        ),
-        SubjectFieldDef(
-          key: SubjectFieldKeys.subjectId,
-          title: 'Subject ID',
-          required: false,
-          order: 1,
-          isSystem: true,
-        ),
-      ],
-    );
-  }
+  /// ✅ Single source of truth for defaults (solves const/defaults issues).
+  static const SubjectInfoBlockDef kDefaults = SubjectInfoBlockDef(
+    enabled: true,
+    columns: 2,
+    schemaVersion: 1,
+    fields: [
+      SubjectFieldDef(
+        key: SubjectFieldKeys.subjectName,
+        title: 'Subject Name',
+        required: true,
+        order: 0,
+        isSystem: true,
+      ),
+      SubjectFieldDef(
+        key: SubjectFieldKeys.subjectId,
+        title: 'Subject ID',
+        required: false,
+        order: 1,
+        isSystem: true,
+      ),
+    ],
+  );
+
+  factory SubjectInfoBlockDef.defaults() => kDefaults;
 
   List<SubjectFieldDef> get orderedFields {
     final list = fields.toList()..sort((a, b) => a.order.compareTo(b.order));
@@ -109,30 +112,34 @@ class SubjectInfoBlockDef {
     int? columns,
     List<SubjectFieldDef>? fields,
   }) {
+    final safeCols = (columns ?? this.columns) == 2 ? 2 : 1;
     return SubjectInfoBlockDef(
       enabled: enabled ?? this.enabled,
+      columns: safeCols,
       schemaVersion: schemaVersion,
-      columns: columns ?? this.columns,
       fields: fields ?? this.fields,
     );
   }
 
   Map<String, dynamic> toJson() => {
         'enabled': enabled,
-        'schemaVersion': schemaVersion,
         'columns': columns,
+        'schemaVersion': schemaVersion,
         'fields': fields.map((f) => f.toJson()).toList(),
       };
 
   factory SubjectInfoBlockDef.fromJson(Map<String, dynamic>? j) {
-    if (j == null) return SubjectInfoBlockDef.defaults();
+    if (j == null) return kDefaults;
+
+    final cols = (j['columns'] as int?) ?? kDefaults.columns;
 
     return SubjectInfoBlockDef(
-      enabled: (j['enabled'] as bool?) ?? true,
-      schemaVersion: (j['schemaVersion'] as int?) ?? 1,
-      columns: ((j['columns'] as int?) ?? 2) == 2 ? 2 : 1,
+      enabled: (j['enabled'] as bool?) ?? kDefaults.enabled,
+      columns: cols == 2 ? 2 : 1,
+      schemaVersion: (j['schemaVersion'] as int?) ?? kDefaults.schemaVersion,
       fields: ((j['fields'] as List?) ?? const [])
-          .map((e) => SubjectFieldDef.fromJson(e as Map<String, dynamic>))
+          .whereType<Map>()
+          .map((e) => SubjectFieldDef.fromJson(Map<String, dynamic>.from(e)))
           .toList(),
     );
   }
