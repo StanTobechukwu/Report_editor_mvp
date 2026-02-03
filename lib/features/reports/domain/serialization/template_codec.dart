@@ -25,13 +25,15 @@ class TemplateCodec {
     );
   }
 
-  // ----- existing node helpers unchanged -----
+  // ----- nodes -----
+
   static Map<String, dynamic> _sectionToJson(SectionNode s) => {
         'type': 'section',
         'id': s.id,
         'title': s.title,
         'collapsed': s.collapsed,
         'style': _styleToJson(s.style),
+        'indent': s.indent, // ✅ added
         'children': s.children.map(_nodeToJson).toList(),
       };
 
@@ -40,6 +42,7 @@ class TemplateCodec {
         title: (j['title'] as String?) ?? '',
         collapsed: (j['collapsed'] as bool?) ?? false,
         style: _styleFromJson((j['style'] as Map?)?.cast<String, dynamic>() ?? {}),
+        indent: (j['indent'] as int?) ?? 0, // ✅ added
         children: ((j['children'] as List?) ?? const [])
             .map((e) => _nodeFromJson(e as Map<String, dynamic>))
             .toList(),
@@ -48,7 +51,12 @@ class TemplateCodec {
   static Map<String, dynamic> _nodeToJson(Node n) {
     if (n is SectionNode) return _sectionToJson(n);
     if (n is ContentNode) {
-      return {'type': 'content', 'id': n.id, 'text': n.text};
+      return {
+        'type': 'content',
+        'id': n.id,
+        'text': n.text,
+        'indent': n.indent, // ✅ added (if ContentNode has indent)
+      };
     }
     throw StateError('Unknown node type');
   }
@@ -60,10 +68,13 @@ class TemplateCodec {
       return ContentNode(
         id: (j['id'] as String?) ?? '',
         text: (j['text'] as String?) ?? '',
+        indent: (j['indent'] as int?) ?? 0, // ✅ added (if ContentNode has indent)
       );
     }
     throw StateError('Unknown node json type: $type');
   }
+
+  // ----- style -----
 
   static Map<String, dynamic> _styleToJson(TitleStyle s) => {
         'level': s.level.name,

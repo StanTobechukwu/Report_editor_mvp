@@ -183,6 +183,34 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     c.dispose();
     return res;
   }
+// function for saving template based on user choice
+  Future<bool?> askTemplateSaveMode(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Save template as'),
+      content: const Text(
+        'Choose whether to save just the structure, or include the current text content.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Structure only'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Include content'),
+        ),
+      ],
+    ),
+  );
+}
+
 
   // ---------------- Global Add (fixed) ----------------
 
@@ -367,6 +395,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Please complete required Subject Info fields.')),
                 );
+                
                 return;
               }
               Navigator.push(
@@ -375,6 +404,28 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
               );
             },
           ),
+          IconButton(
+  tooltip: 'Save as template',
+  icon: const Icon(Icons.bookmark_add_outlined),
+  onPressed: () async {
+    final name = await _promptText(context, 'Template name', hint: 'e.g., Upper GI Template');
+    if (name == null || name.trim().isEmpty) return;
+
+    final includeContent = await askTemplateSaveMode(context);
+    if (includeContent == null) return;
+
+    await vm.saveAsTemplate(
+      name: name.trim(),
+      includeContent: includeContent,
+    );
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Template saved')),
+    );
+  },
+),
+
         ],
       ),
 

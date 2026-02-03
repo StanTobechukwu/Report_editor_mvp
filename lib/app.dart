@@ -5,6 +5,7 @@ import 'features/reports/data/reports_repository.dart';
 import 'features/reports/data/templates_repository.dart';
 import 'features/reports/providers/report_editor_provider.dart';
 import 'features/reports/providers/reports_list_provider.dart';
+import 'features/reports/providers/template_list_provider.dart';
 import 'features/reports/ui/reports_list_screen.dart';
 
 class MyApp extends StatelessWidget {
@@ -17,6 +18,8 @@ class MyApp extends StatelessWidget {
 
     return MultiProvider(
       providers: [
+        Provider.value(value: reportsRepo),
+        Provider.value(value: templatesRepo),
         ChangeNotifierProvider(
           create: (_) => ReportEditorProvider(
             repo: reportsRepo,
@@ -25,6 +28,9 @@ class MyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(
           create: (_) => ReportsListProvider(repo: reportsRepo)..refresh(),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => TemplateListProvider(repo: templatesRepo)..load(),
         ),
       ],
       child: MaterialApp(

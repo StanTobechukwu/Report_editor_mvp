@@ -5,6 +5,8 @@ import '../data/reports_repository.dart';
 import '../providers/report_editor_provider.dart';
 import '../providers/reports_list_provider.dart';
 import 'report_editor_screen.dart';
+import 'template_list_screen.dart';
+
 
 class ReportsListScreen extends StatelessWidget {
   const ReportsListScreen({super.key});
@@ -20,7 +22,17 @@ class ReportsListScreen extends StatelessWidget {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => listVm.refresh(),
-          )
+          ),IconButton(
+  icon: const Icon(Icons.view_list_outlined),
+  tooltip: 'Templates',
+  onPressed: () {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const TemplatesListScreen()),
+    );
+  },
+),
+
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(

@@ -87,23 +87,32 @@ class ReportEditorProvider extends ChangeNotifier {
     _selectedNodeId = null;
     notifyListeners();
   }
+void newReportFromTemplate(TemplateDoc template) {
+  final now = nowIso();
 
-  void newReportFromTemplate(TemplateDoc template) {
-    final now = nowIso();
-    _doc = ReportDoc(
-      reportId: newId('rpt'),
-      createdAtIso: now,
-      updatedAtIso: now,
-      roots: template.roots,
-      images: const [],
-      placementChoice: ImagePlacementChoice.attachmentsOnly,
-      signature: const SignatureBlock(),
-      subjectInfoDef: template.subjectInfo,
-      subjectInfo: const SubjectInfoValues({}),
-    );
-    _selectedNodeId = null;
-    notifyListeners();
-  }
+  _doc = ReportDoc(
+    reportId: newId('rpt'),
+    createdAtIso: now,
+    updatedAtIso: now,
+
+    // 🔥 FIX 1: deep clone
+    roots: template.roots
+        .map((s) => s.cloneNodeTree())
+        .toList(growable: false),
+
+    images: const [],
+    placementChoice: ImagePlacementChoice.attachmentsOnly,
+    signature: const SignatureBlock(),
+
+    subjectInfoDef: template.subjectInfo,
+
+    // 🔥 FIX 2: safe value initialization
+    subjectInfo: SubjectInfoValues.emptyFromDef(template.subjectInfo),
+  );
+
+  _selectedNodeId = null;
+  notifyListeners();
+}
 
   Future<void> save() async {
     _doc = _doc.copyWith(updatedAtIso: nowIso());
@@ -253,6 +262,30 @@ class ReportEditorProvider extends ChangeNotifier {
     final chunk = List.generate(8, (_) => r.nextInt(36).toRadixString(36)).join();
     return 'custom_$chunk';
   }
+
+  Future<void> saveAsTemplate({
+  required String name,
+  required bool includeContent,
+}) async {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return;
+
+  final t = TemplateDoc(
+    templateId: newId('tpl'),
+    updatedAt: DateTime.now(),
+    name: trimmed,
+
+    // structure OR structure+content
+    roots: _doc.roots
+        .map((r) => r.toTemplateNode(includeContent: includeContent))
+        .toList(growable: false),
+
+    subjectInfo: _doc.subjectInfoDef,
+  );
+
+  await templatesRepo.saveTemplate(t);
+}
+
 
   // =========================
   // Tree: IDs

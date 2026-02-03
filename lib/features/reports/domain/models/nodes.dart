@@ -95,3 +95,56 @@ class ContentNode extends Node {
     );
   }
 }
+extension TemplateClone on SectionNode {
+  /// Export a template snapshot of this section.
+  ///
+  /// includeContent = false -> keep only SectionNode children (structure-only)
+  /// includeContent = true  -> keep SectionNode + ContentNode children (text content)
+  ///
+  /// Images are not stored in nodes, so they are never included.
+  SectionNode toTemplateNode({required bool includeContent}) {
+    final outChildren = <Node>[];
+
+    for (final child in children) {
+      if (child is SectionNode) {
+        outChildren.add(
+          child.toTemplateNode(includeContent: includeContent),
+        );
+      } else if (includeContent && child is ContentNode) {
+        outChildren.add(child);
+      }
+      // else: drop non-section nodes (and drop content when structure-only)
+    }
+
+    return SectionNode(
+      id: id,
+      title: title,
+      collapsed: collapsed,
+      style: style,
+      indent: indent,
+      children: outChildren,
+    );
+  }
+}
+extension ReportClone on SectionNode {
+  SectionNode cloneNodeTree() {
+    return SectionNode(
+      id: id,
+      title: title,
+      collapsed: collapsed,
+      style: style,
+      indent: indent,
+      children: children.map((n) {
+        if (n is SectionNode) return n.cloneNodeTree();
+        if (n is ContentNode) {
+          return ContentNode(
+            id: n.id,
+            text: n.text,
+            indent: n.indent,
+          );
+        }
+        return n; // if you have other Node types, we can explicitly clone them too
+      }).toList(growable: false),
+    );
+  }
+}
