@@ -37,9 +37,20 @@ class ReportEditorProvider extends ChangeNotifier {
   ReportDoc get doc => _doc;
   String? get selectedNodeId => _selectedNodeId;
 
-  /// Subject info schema (defs) + values.
   SubjectInfoBlockDef get subjectInfoDef => _doc.subjectInfoDef;
   SubjectInfoValues get subjectInfoValues => _doc.subjectInfo;
+
+  bool get selectedIsSection {
+    final id = _selectedNodeId;
+    if (id == null) return false;
+    return _findNodeById(_doc.roots, id) is SectionNode;
+  }
+
+  bool get selectedIsContent {
+    final id = _selectedNodeId;
+    if (id == null) return false;
+    return _findNodeById(_doc.roots, id) is ContentNode;
+  }
 
   // =========================
   // Selection
@@ -77,10 +88,6 @@ class ReportEditorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Start report from a template:
-  /// - structure from template.roots
-  /// - subjectInfoDef from template.subjectInfo
-  /// - subjectInfo values start empty
   void newReportFromTemplate(TemplateDoc template) {
     final now = nowIso();
     _doc = ReportDoc(
@@ -166,7 +173,10 @@ class ReportEditorProvider extends ChangeNotifier {
 
   void removeSubjectField(String fieldKey) {
     final fields = _doc.subjectInfoDef.fields;
-    final target = fields.firstWhere((f) => f.key == fieldKey, orElse: () => const SubjectFieldDef(key: '', title: '', required: false, order: 0, isSystem: false));
+    final target = fields.firstWhere(
+      (f) => f.key == fieldKey,
+      orElse: () => const SubjectFieldDef(key: '', title: '', required: false, order: 0, isSystem: false),
+    );
     if (target.key.isEmpty) return;
     if (target.isSystem) return;
 
@@ -187,9 +197,9 @@ class ReportEditorProvider extends ChangeNotifier {
     final t = title.trim();
     if (t.isEmpty) return;
 
-    final nextFields = _doc.subjectInfoDef.fields
-        .map((f) => f.key == fieldKey ? f.copyWith(title: t) : f)
-        .toList();
+    final nextFields = _doc.subjectInfoDef.fields.map((f) {
+      return f.key == fieldKey ? f.copyWith(title: t) : f;
+    }).toList();
 
     _doc = _doc.copyWith(
       subjectInfoDef: _doc.subjectInfoDef.copyWith(fields: nextFields),
@@ -199,9 +209,9 @@ class ReportEditorProvider extends ChangeNotifier {
   }
 
   void toggleSubjectRequired(String fieldKey, bool required) {
-    final nextFields = _doc.subjectInfoDef.fields
-        .map((f) => f.key == fieldKey ? f.copyWith(required: required) : f)
-        .toList();
+    final nextFields = _doc.subjectInfoDef.fields.map((f) {
+      return f.key == fieldKey ? f.copyWith(required: required) : f;
+    }).toList();
 
     _doc = _doc.copyWith(
       subjectInfoDef: _doc.subjectInfoDef.copyWith(fields: nextFields),
@@ -245,10 +255,14 @@ class ReportEditorProvider extends ChangeNotifier {
   }
 
   // =========================
-  // Tree: Add
+  // Tree: IDs
   // =========================
 
   String _id(String prefix) => newId(prefix);
+
+  // =========================
+  // Tree: Global Add (structure)
+  // =========================
 
   void addTopLevelSection(String title) {
     final t = title.trim();
@@ -263,45 +277,132 @@ class ReportEditorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addSubsectionUnderSelected(String title) {
-    final parentId = _selectedNodeId;
+  /// Add same-level section after the selected node.
+  /// - If selected is root section: insert in roots.
+  /// - If selected is nested section/content: insert as sibling under the same parent section.
+  void addSameLevelSection(String title) {
     final t = title.trim();
-    if (parentId == null || t.isEmpty) return;
+    final targetId = _selectedNodeId;
+    if (t.isEmpty || targetId == null) return;
 
-    final child = SectionNode(id: _id('sec'), title: t);
+    final newSec = SectionNode(id: _id('sec'), title: t);
 
-    _doc = _doc.copyWith(
-      roots: _updateSectionTree(
-        _doc.roots,
-        parentId,
-        (s) => s.copyWith(
-          children: [...s.children, child],
-          collapsed: false,
-        ),
-      ),
-      updatedAtIso: nowIso(),
-    );
+    final nextRoots = _insertSibling(_doc.roots, targetId, newSec);
+    _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
     notifyListeners();
   }
 
-  void addContentUnderSelected({String initialText = ''}) {
-    final parentId = _selectedNodeId;
-    if (parentId == null) return;
+  /// Wrap selected SECTION in a new parent SECTION.
+  /// - Only works if selected is SectionNode.
+  /// - Wrapper replaces the selected node in place.
+  /// - Slight auto-indentation applied (child subtree indent +1).
+  void wrapSelectedSection(String wrapperTitle) {
+    final t = wrapperTitle.trim();
+    final targetId = _selectedNodeId;
+    if (t.isEmpty || targetId == null) return;
 
-    final child = ContentNode(id: _id('txt'), text: initialText);
+    final node = _findNodeById(_doc.roots, targetId);
+    if (node is! SectionNode) return;
 
-    _doc = _doc.copyWith(
-      roots: _updateSectionTree(
-        _doc.roots,
-        parentId,
-        (s) => s.copyWith(
-          children: [...s.children, child],
-          collapsed: false,
-        ),
-      ),
-      updatedAtIso: nowIso(),
+    final wrappedChild = _shiftIndentSectionSubtree(node, 1);
+
+    final wrapper = SectionNode(
+      id: _id('sec'),
+      title: t,
+      indent: node.indent,
+      children: [wrappedChild],
+      collapsed: false,
+      style: node.style, // keeps consistent style; adjust later if desired
     );
+
+    final nextRoots = _replaceNode(_doc.roots, targetId, wrapper);
+    _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
     notifyListeners();
+  }
+
+  /// Delete selected node (section or content).
+  void deleteSelected() {
+    final targetId = _selectedNodeId;
+    if (targetId == null) return;
+
+    final nextRoots = _deleteNode(_doc.roots, targetId);
+    _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
+    _selectedNodeId = null;
+    notifyListeners();
+  }
+
+  // =========================
+  // Tree: Add Here (context)
+  // =========================
+  //
+  // Rules:
+  // If selected node is SectionNode:
+  //   - Add subsection => CHILD SectionNode
+  //   - Add content    => CHILD ContentNode
+  //
+  // If selected node is ContentNode:
+  //   - Add subsection => SIBLING SectionNode (same parent)
+  //   - Add content    => SIBLING ContentNode (same parent)
+
+  void addHereSubsection(String title) {
+    final t = title.trim();
+    final targetId = _selectedNodeId;
+    if (t.isEmpty || targetId == null) return;
+
+    final selected = _findNodeById(_doc.roots, targetId);
+    final newSec = SectionNode(id: _id('sec'), title: t);
+
+    if (selected is SectionNode) {
+      // child
+      _doc = _doc.copyWith(
+        roots: _updateSectionTree(
+          _doc.roots,
+          targetId,
+          (s) => s.copyWith(children: [...s.children, newSec], collapsed: false),
+        ),
+        updatedAtIso: nowIso(),
+      );
+      notifyListeners();
+      return;
+    }
+
+    if (selected is ContentNode) {
+      // sibling
+      final nextRoots = _insertSibling(_doc.roots, targetId, newSec);
+      _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
+      notifyListeners();
+      return;
+    }
+  }
+
+  void addHereContent({String initialText = ''}) {
+    final targetId = _selectedNodeId;
+    if (targetId == null) return;
+
+    final selected = _findNodeById(_doc.roots, targetId);
+    final newTxt = ContentNode(id: _id('txt'), text: initialText);
+
+    if (selected is SectionNode) {
+      // child
+      _doc = _doc.copyWith(
+        roots: _updateSectionTree(
+          _doc.roots,
+          targetId,
+          (s) => s.copyWith(children: [...s.children, newTxt], collapsed: false),
+        ),
+        updatedAtIso: nowIso(),
+      );
+      notifyListeners();
+      return;
+    }
+
+    if (selected is ContentNode) {
+      // sibling
+      final nextRoots = _insertSibling(_doc.roots, targetId, newTxt);
+      _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
+      notifyListeners();
+      return;
+    }
   }
 
   // =========================
@@ -350,39 +451,6 @@ class ReportEditorProvider extends ChangeNotifier {
   void updateContent(String contentId, String text) {
     _doc = _doc.copyWith(
       roots: _updateContentTree(_doc.roots, contentId, text),
-      updatedAtIso: nowIso(),
-    );
-    notifyListeners();
-  }
-
-  // =========================
-  // Indent / Outdent nodes
-  // =========================
-
-  void indentNode(String nodeId) => _shiftIndent(nodeId, 1);
-  void outdentNode(String nodeId) => _shiftIndent(nodeId, -1);
-
-  void _shiftIndent(String nodeId, int delta) {
-    int clampIndent(int v) => v.clamp(0, 20);
-
-    Node transform(Node n) {
-      if (n.id == nodeId) {
-        if (n is SectionNode) return n.copyWith(indent: clampIndent(n.indent + delta));
-        if (n is ContentNode) return n.copyWith(indent: clampIndent(n.indent + delta));
-      }
-
-      if (n is SectionNode) {
-        final updatedChildren = n.children.map(transform).toList();
-        return n.copyWith(children: updatedChildren);
-      }
-
-      return n;
-    }
-
-    final updatedRoots = _doc.roots.map((s) => transform(s) as SectionNode).toList();
-
-    _doc = _doc.copyWith(
-      roots: updatedRoots,
       updatedAtIso: nowIso(),
     );
     notifyListeners();
@@ -455,7 +523,7 @@ class ReportEditorProvider extends ChangeNotifier {
   }
 
   // =========================
-  // Tree helpers
+  // Tree helpers (existing)
   // =========================
 
   List<SectionNode> _updateSectionTree(
@@ -503,5 +571,154 @@ class ReportEditorProvider extends ChangeNotifier {
     }
 
     return roots.map((s) => s.copyWith(children: walk(s.children))).toList();
+  }
+
+  // =========================
+  // Tree helpers (NEW)
+  // =========================
+
+  Node? _findNodeById(List<SectionNode> roots, String id) {
+    for (final s in roots) {
+      if (s.id == id) return s;
+      final found = _findNodeInChildren(s.children, id);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  Node? _findNodeInChildren(List<Node> children, String id) {
+    for (final n in children) {
+      if (n.id == id) return n;
+      if (n is SectionNode) {
+        final found = _findNodeInChildren(n.children, id);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  /// Insert sibling after a target node id (works for roots + nested).
+  List<SectionNode> _insertSibling(List<SectionNode> roots, String targetId, Node newNode) {
+    // root-level insert
+    for (int i = 0; i < roots.length; i++) {
+      if (roots[i].id == targetId && newNode is SectionNode) {
+        final next = [...roots];
+        next.insert(i + 1, newNode);
+        return next;
+      }
+    }
+
+    // nested insert
+    return roots.map((s) => s.copyWith(children: _insertSiblingInChildren(s.children, targetId, newNode))).toList();
+  }
+
+  List<Node> _insertSiblingInChildren(List<Node> children, String targetId, Node newNode) {
+    for (int i = 0; i < children.length; i++) {
+      final n = children[i];
+      if (n.id == targetId) {
+        final next = [...children];
+        next.insert(i + 1, newNode);
+        return next;
+      }
+      if (n is SectionNode) {
+        final updated = _insertSiblingInChildren(n.children, targetId, newNode);
+        if (!identical(updated, n.children)) {
+          final next = [...children];
+          next[i] = n.copyWith(children: updated);
+          return next;
+        }
+      }
+    }
+    return children;
+  }
+
+  /// Replace a node (root or nested) by id.
+  List<SectionNode> _replaceNode(List<SectionNode> roots, String targetId, SectionNode replacement) {
+    // root replace
+    for (int i = 0; i < roots.length; i++) {
+      if (roots[i].id == targetId) {
+        final next = [...roots];
+        next[i] = replacement;
+        return next;
+      }
+    }
+
+    // nested replace
+    return roots.map((s) => s.copyWith(children: _replaceNodeInChildren(s.children, targetId, replacement))).toList();
+  }
+
+  List<Node> _replaceNodeInChildren(List<Node> children, String targetId, SectionNode replacement) {
+    for (int i = 0; i < children.length; i++) {
+      final n = children[i];
+      if (n.id == targetId) {
+        final next = [...children];
+        next[i] = replacement;
+        return next;
+      }
+      if (n is SectionNode) {
+        final updated = _replaceNodeInChildren(n.children, targetId, replacement);
+        if (!identical(updated, n.children)) {
+          final next = [...children];
+          next[i] = n.copyWith(children: updated);
+          return next;
+        }
+      }
+    }
+    return children;
+  }
+
+  /// Delete a node (root or nested) by id.
+  List<SectionNode> _deleteNode(List<SectionNode> roots, String targetId) {
+    // root delete
+    final rootIndex = roots.indexWhere((s) => s.id == targetId);
+    if (rootIndex != -1) {
+      final next = [...roots]..removeAt(rootIndex);
+      return next;
+    }
+
+    // nested delete
+    return roots.map((s) => s.copyWith(children: _deleteNodeInChildren(s.children, targetId))).toList();
+  }
+
+  List<Node> _deleteNodeInChildren(List<Node> children, String targetId) {
+    final idx = children.indexWhere((n) => n.id == targetId);
+    if (idx != -1) {
+      final next = [...children]..removeAt(idx);
+      return next;
+    }
+
+    // recurse
+    for (int i = 0; i < children.length; i++) {
+      final n = children[i];
+      if (n is SectionNode) {
+        final updated = _deleteNodeInChildren(n.children, targetId);
+        if (!identical(updated, n.children)) {
+          final next = [...children];
+          next[i] = n.copyWith(children: updated);
+          return next;
+        }
+      }
+    }
+
+    return children;
+  }
+
+  /// Shift indent for an entire section subtree (including nested children)
+  SectionNode _shiftIndentSectionSubtree(SectionNode node, int delta) {
+    int clampIndent(int v) => v.clamp(0, 20);
+
+    Node shift(Node n) {
+      if (n is ContentNode) return n.copyWith(indent: clampIndent(n.indent + delta));
+      if (n is SectionNode) {
+        final nextChildren = n.children.map(shift).toList();
+        return n.copyWith(
+          indent: clampIndent(n.indent + delta),
+          children: nextChildren,
+        );
+      }
+      return n;
+    }
+
+    return shift(node) as SectionNode;
   }
 }

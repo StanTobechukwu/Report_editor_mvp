@@ -22,13 +22,33 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   final Map<String, TextEditingController> _subjectControllers = {};
   Map<String, String> _subjectErrors = {};
 
+  // Keeps typing stable for Signer fields.
+  late final TextEditingController _roleTitleC;
+  late final TextEditingController _signerNameC;
+  late final TextEditingController _credentialsC;
+
+  bool _hintShown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _roleTitleC = TextEditingController();
+    _signerNameC = TextEditingController();
+    _credentialsC = TextEditingController();
+  }
+
   @override
   void dispose() {
     for (final c in _subjectControllers.values) {
       c.dispose();
     }
+    _roleTitleC.dispose();
+    _signerNameC.dispose();
+    _credentialsC.dispose();
     super.dispose();
   }
+
+  Color _accent(BuildContext context) => Theme.of(context).colorScheme.primary;
 
   TextEditingController _controllerFor(String key, String initial) {
     return _subjectControllers.putIfAbsent(
@@ -43,6 +63,17 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       final c = _controllerFor(f.key, current);
       if (c.text != current) c.text = current;
     }
+  }
+
+  void _syncSignerControllers(ReportEditorProvider vm) {
+    final role = vm.doc.signature.roleTitle;
+    if (_roleTitleC.text != role) _roleTitleC.text = role;
+
+    final name = vm.doc.signature.name;
+    if (_signerNameC.text != name) _signerNameC.text = name;
+
+    final creds = vm.doc.signature.credentials;
+    if (_credentialsC.text != creds) _credentialsC.text = creds;
   }
 
   Map<String, String> _validateSubjectInfo(ReportEditorProvider vm) {
@@ -60,47 +91,58 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     return errors;
   }
 
+  // ---------------- Dialogs / Sheets ----------------
+
   Future<void> _addSubjectFieldDialog(ReportEditorProvider vm) async {
-    final title = TextEditingController();
+    final titleC = TextEditingController();
     bool required = false;
 
     final res = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Add Subject Field'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: title,
-              decoration: const InputDecoration(
-                labelText: 'Field title (e.g., Address)',
-                border: OutlineInputBorder(),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: const Text('Add Subject Field'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleC,
+                decoration: const InputDecoration(
+                  labelText: 'Field title (e.g., Address)',
+                  border: OutlineInputBorder(),
+                ),
               ),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                value: required,
+                onChanged: (v) => setLocal(() => required = v ?? false),
+                title: const Text('Required'),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
             ),
-            const SizedBox(height: 12),
-            CheckboxListTile(
-              value: required,
-              onChanged: (v) => setState(() => required = v ?? false),
-              title: const Text('Required'),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Add'),
             ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Add')),
-        ],
       ),
     );
 
-    title.dispose();
+    final titleText = titleC.text.trim();
+    titleC.dispose();
 
     if (res != true) return;
 
     vm.addSubjectField(
-      title: title.text.trim().isEmpty ? 'New field' : title.text.trim(),
+      title: titleText.isEmpty ? 'New field' : titleText,
       required: required,
     );
   }
@@ -122,10 +164,174 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     setState(() => _subjectErrors = _validateSubjectInfo(vm));
   }
 
+  Future<String?> _promptText(BuildContext context, String title, {String hint = 'Type a name…'}) async {
+    final c = TextEditingController();
+    final res = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: c,
+          decoration: InputDecoration(hintText: hint),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, c.text), child: const Text('Add')),
+        ],
+      ),
+    );
+    c.dispose();
+    return res;
+  }
+
+  // ---------------- Global Add (fixed) ----------------
+
+  Future<void> _showGlobalAddSheet(BuildContext context, ReportEditorProvider vm) async {
+    final hasSelection = vm.selectedNodeId != null;
+    final selectedIsSection = vm.selectedIsSection;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('Structure')),
+            ListTile(
+              leading: const Icon(Icons.view_agenda_outlined),
+              title: const Text('Add top-level section'),
+              onTap: () => Navigator.pop(context, 'add_top'),
+            ),
+            if (hasSelection) ...[
+              ListTile(
+                leading: const Icon(Icons.library_add_outlined),
+                title: const Text('Add same-level section'),
+                onTap: () => Navigator.pop(context, 'add_same'),
+              ),
+              if (selectedIsSection)
+                ListTile(
+                  leading: const Icon(Icons.layers_outlined),
+                  title: const Text('Wrap selected section'),
+                  onTap: () => Navigator.pop(context, 'wrap'),
+                ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Delete selected'),
+                onTap: () => Navigator.pop(context, 'delete'),
+              ),
+            ],
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+
+    if (action == null) return;
+
+    if (action == 'add_top') {
+      final title = await _promptText(context, 'New top-level section');
+      if (title != null && title.trim().isNotEmpty) vm.addTopLevelSection(title);
+      return;
+    }
+
+    if (!hasSelection) return;
+
+    if (action == 'add_same') {
+      final title = await _promptText(context, 'New same-level section');
+      if (title != null && title.trim().isNotEmpty) {
+        vm.addSameLevelSection(title);
+      }
+      return;
+    }
+
+    if (action == 'wrap') {
+      final title = await _promptText(context, 'Wrapper section title', hint: 'e.g., Findings');
+      if (title != null && title.trim().isNotEmpty) {
+        vm.wrapSelectedSection(title);
+      }
+      return;
+    }
+
+    if (action == 'delete') {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Delete selected?'),
+          content: const Text('This cannot be undone.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+          ],
+        ),
+      );
+      if (ok == true) vm.deleteSelected();
+      return;
+    }
+  }
+
+  // ---------------- Add Here (context) ----------------
+
+  Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) async {
+    if (vm.selectedNodeId == null) return;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('Add here')),
+            ListTile(
+              leading: const Icon(Icons.subdirectory_arrow_right),
+              title: const Text('Add subsection'),
+              onTap: () => Navigator.pop(context, 'subsection'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.notes_outlined),
+              title: const Text('Add content'),
+              onTap: () => Navigator.pop(context, 'content'),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+
+    if (action == null) return;
+
+    if (action == 'subsection') {
+      final title = await _promptText(context, 'New subsection');
+      if (title != null && title.trim().isNotEmpty) {
+        vm.addHereSubsection(title);
+      }
+      return;
+    }
+
+    if (action == 'content') {
+      vm.addHereContent();
+      return;
+    }
+  }
+
+  // ---------------- Build ----------------
+
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<ReportEditorProvider>();
     _syncSubjectControllers(vm);
+    _syncSignerControllers(vm);
+
+    if (!_hintShown && vm.doc.roots.isNotEmpty && vm.selectedNodeId == null) {
+      _hintShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Tip: Tap a section, then use Add here for content/subsections.')),
+        );
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -163,16 +369,22 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                 );
                 return;
               }
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const ReportPreviewScreen()));
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ReportPreviewScreen()),
+              );
             },
           ),
         ],
       ),
+
+      // ✅ Global Add is FIXED and always useful.
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showAddSheet(context, vm),
+        onPressed: () => _showGlobalAddSheet(context, vm),
         icon: const Icon(Icons.add),
         label: const Text('Add'),
       ),
+
       body: GestureDetector(
         onTap: vm.clearSelection,
         child: ListView(
@@ -188,7 +400,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                   if (vm.doc.roots.isEmpty)
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 18),
-                      child: Text('No sections yet. Tap Add → Add section.'),
+                      child: Text('No sections yet. Tap Add to create the first section.'),
                     ),
                   ...vm.doc.roots.map((s) => _sectionWidget(context, vm, s)),
                 ],
@@ -199,70 +411,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             _imagesCard(context, vm),
             const SizedBox(height: 12),
 
-            _card(
-              title: 'Signer',
-              child: Column(
-                children: [
-                  TextField(
-                    decoration: const InputDecoration(
-                      labelText: 'Title (e.g., Reporter, Endoscopist, Radiologist)',
-                      border: OutlineInputBorder(),
-                    ),
-                    controller: TextEditingController(text: vm.doc.signature.roleTitle)
-                      ..selection = TextSelection.collapsed(offset: vm.doc.signature.roleTitle.length),
-                    onChanged: (v) => vm.updateSigner(roleTitle: v),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder()),
-                    controller: TextEditingController(text: vm.doc.signature.name)
-                      ..selection = TextSelection.collapsed(offset: vm.doc.signature.name.length),
-                    onChanged: (v) => vm.updateSigner(name: v),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    decoration: const InputDecoration(
-                      labelText: 'Credentials (optional)',
-                      border: OutlineInputBorder(),
-                    ),
-                    controller: TextEditingController(text: vm.doc.signature.credentials)
-                      ..selection = TextSelection.collapsed(offset: vm.doc.signature.credentials.length),
-                    onChanged: (v) => vm.updateSigner(credentials: v),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: () async {
-                            final path = await Navigator.push<String?>(
-                              context,
-                              MaterialPageRoute(builder: (_) => const SignatureCaptureScreen()),
-                            );
-                            if (path != null) vm.setSignatureFilePath(path);
-                          },
-                          icon: const Icon(Icons.draw_outlined),
-                          label: Text(
-                            vm.doc.signature.signatureFilePath == null ? 'Add Signature' : 'Update Signature',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (vm.doc.signature.signatureFilePath != null) ...[
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        File(vm.doc.signature.signatureFilePath!),
-                        height: 110,
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
+            _card(title: 'Signer', child: _signerCard(vm)),
           ],
         ),
       ),
@@ -273,6 +422,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
   Widget _subjectInfoCard(ReportEditorProvider vm) {
     final def = vm.subjectInfoDef;
+
     if (!def.enabled) {
       return _card(
         title: 'Subject Info',
@@ -335,28 +485,35 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          // ✅ Wrap prevents buttons going off-screen.
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Switch(
-                value: def.enabled,
-                onChanged: vm.setSubjectInfoEnabled,
-              ),
-              const SizedBox(width: 6),
-              SegmentedButton<int>(
-                segments: const [
-                  ButtonSegment(value: 1, label: Text('1 col')),
-                  ButtonSegment(value: 2, label: Text('2 col')),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: def.enabled,
+                    onChanged: vm.setSubjectInfoEnabled,
+                  ),
+                  const SizedBox(width: 6),
+                  SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(value: 1, label: Text('1 col')),
+                      ButtonSegment(value: 2, label: Text('2 col')),
+                    ],
+                    selected: {def.columns},
+                    onSelectionChanged: (s) => vm.setSubjectInfoColumns(s.first),
+                  ),
                 ],
-                selected: {def.columns},
-                onSelectionChanged: (s) => vm.setSubjectInfoColumns(s.first),
               ),
-              const Spacer(),
               OutlinedButton.icon(
                 onPressed: () => _editSubjectFieldsSheet(vm),
                 icon: const Icon(Icons.tune),
                 label: const Text('Fields'),
               ),
-              const SizedBox(width: 8),
               FilledButton.icon(
                 onPressed: () => _addSubjectFieldDialog(vm),
                 icon: const Icon(Icons.add),
@@ -371,117 +528,17 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     );
   }
 
-  // ---------------- Add actions ----------------
+  // ---------------- Outline widgets ----------------
 
-  Future<void> _showAddSheet(BuildContext context, ReportEditorProvider vm) async {
-    final hasSelection = vm.selectedNodeId != null;
-
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(title: Text('Add…')),
-            ListTile(
-              leading: const Icon(Icons.view_agenda_outlined),
-              title: const Text('Add section (top level)'),
-              onTap: () => Navigator.pop(context, 'section'),
-            ),
-            if (hasSelection) ...[
-              ListTile(
-                leading: const Icon(Icons.subdirectory_arrow_right),
-                title: const Text('Add subsection (under selected)'),
-                onTap: () => Navigator.pop(context, 'subsection'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.notes_outlined),
-                title: const Text('Add content (under selected)'),
-                onTap: () => Navigator.pop(context, 'content'),
-              ),
-            ],
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
-
-    if (action == null) return;
-
-    if (action == 'section') {
-      final title = await _promptText(context, 'New section');
-      if (title != null && title.trim().isNotEmpty) vm.addTopLevelSection(title);
-    } else if (action == 'subsection') {
-      final title = await _promptText(context, 'New subsection');
-      if (title != null && title.trim().isNotEmpty) vm.addSubsectionUnderSelected(title);
-    } else if (action == 'content') {
-      vm.addContentUnderSelected();
-    }
-  }
-
-  Future<String?> _promptText(BuildContext context, String title) async {
-    final c = TextEditingController();
-    final res = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: c,
-          decoration: const InputDecoration(hintText: 'Type a name…'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, c.text), child: const Text('Add')),
-        ],
-      ),
-    );
-    c.dispose();
-    return res;
-  }
-
-  // ---------------- UI blocks ----------------
-
-  Widget _card({required String title, required Widget child}) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 10),
-            child,
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _imagesCard(BuildContext context, ReportEditorProvider vm) {
-    return Card(
-      child: ListTile(
-        title: const Text('Images'),
-        subtitle: Text(
-          'Selected: ${vm.doc.images.length} • '
-          'Mode: ${vm.doc.placementChoice == ImagePlacementChoice.inlinePage1 ? "Inline enabled (max 12)" : "Attachments only (max 8)"}',
-        ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => _openImagesManager(context, vm),
-      ),
-    );
-  }
-
-  Future<void> _openImagesManager(BuildContext context, ReportEditorProvider vm) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: _ImagesManager(vm: vm),
-        ),
+  Widget _contextAddHereButton(BuildContext context, ReportEditorProvider vm) {
+    final accent = _accent(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: 40, top: 6),
+      child: FilledButton.icon(
+        style: FilledButton.styleFrom(backgroundColor: accent),
+        onPressed: () => _showAddHereSheet(context, vm),
+        icon: const Icon(Icons.add),
+        label: const Text('Add here'),
       ),
     );
   }
@@ -490,6 +547,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     final indent = (section.indent) * 16.0;
     final selected = vm.selectedNodeId == section.id;
     final hasChildren = section.children.isNotEmpty;
+    final accent = _accent(context);
 
     final style = TextStyle(
       fontWeight: section.style.bold ? FontWeight.w800 : FontWeight.w600,
@@ -511,7 +569,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       child: Column(
         children: [
           Material(
-            color: selected ? Colors.teal.shade500.withAlpha(20) : Colors.transparent,
+            color: selected ? accent.withOpacity(0.10) : Colors.transparent,
             borderRadius: BorderRadius.circular(14),
             child: InkWell(
               borderRadius: BorderRadius.circular(14),
@@ -543,6 +601,10 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
               ),
             ),
           ),
+
+          // ✅ Add Here = only subsection/content logic
+          if (selected) _contextAddHereButton(context, vm),
+
           if (!section.collapsed)
             ...section.children.map((child) {
               if (child is ContentNode) {
@@ -551,27 +613,34 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
                 return Padding(
                   padding: EdgeInsets.only(left: childIndent + 26, top: 8),
-                  child: Material(
-                    color: contentSelected ? Colors.teal.shade500.withAlpha(12) : Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => vm.selectNode(child.id),
-                      child: Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: TextField(
-                          controller: TextEditingController(text: child.text)
-                            ..selection = TextSelection.collapsed(offset: child.text.length),
-                          minLines: 2,
-                          maxLines: 6,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            hintText: 'Enter text…',
+                  child: Column(
+                    children: [
+                      Material(
+                        color: contentSelected ? accent.withOpacity(0.07) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () => vm.selectNode(child.id),
+                          child: Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: TextField(
+                              controller: TextEditingController(text: child.text)
+                                ..selection = TextSelection.collapsed(offset: child.text.length),
+                              minLines: 2,
+                              maxLines: 6,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                hintText: 'Enter text…',
+                              ),
+                              onChanged: (v) => vm.updateContent(child.id, v),
+                            ),
                           ),
-                          onChanged: (v) => vm.updateContent(child.id, v),
                         ),
                       ),
-                    ),
+
+                      // ✅ If content is selected, Add Here still works (adds siblings)
+                      if (contentSelected) _contextAddHereButton(context, vm),
+                    ],
                   ),
                 );
               }
@@ -579,6 +648,113 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
               return const SizedBox.shrink();
             }),
         ],
+      ),
+    );
+  }
+
+  // ---------------- Other UI blocks ----------------
+
+  Widget _imagesCard(BuildContext context, ReportEditorProvider vm) {
+    return Card(
+      child: ListTile(
+        title: const Text('Images'),
+        subtitle: Text(
+          'Selected: ${vm.doc.images.length} • '
+          'Mode: ${vm.doc.placementChoice == ImagePlacementChoice.inlinePage1 ? "Inline enabled (max 12)" : "Attachments only (max 8)"}',
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => _openImagesManager(context, vm),
+      ),
+    );
+  }
+
+  Future<void> _openImagesManager(BuildContext context, ReportEditorProvider vm) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: _ImagesManager(vm: vm),
+        ),
+      ),
+    );
+  }
+
+  Widget _signerCard(ReportEditorProvider vm) {
+    return Column(
+      children: [
+        TextField(
+          decoration: const InputDecoration(
+            labelText: 'Title (e.g., Reporter, Endoscopist, Radiologist)',
+            border: OutlineInputBorder(),
+          ),
+          controller: _roleTitleC,
+          onChanged: (v) => vm.updateSigner(roleTitle: v),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder()),
+          controller: _signerNameC,
+          onChanged: (v) => vm.updateSigner(name: v),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          decoration: const InputDecoration(
+            labelText: 'Credentials (optional)',
+            border: OutlineInputBorder(),
+          ),
+          controller: _credentialsC,
+          onChanged: (v) => vm.updateSigner(credentials: v),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: () async {
+                  final path = await Navigator.push<String?>(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SignatureCaptureScreen()),
+                  );
+                  if (path != null) vm.setSignatureFilePath(path);
+                },
+                icon: const Icon(Icons.draw_outlined),
+                label: Text(
+                  vm.doc.signature.signatureFilePath == null ? 'Add Signature' : 'Update Signature',
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (vm.doc.signature.signatureFilePath != null) ...[
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.file(
+              File(vm.doc.signature.signatureFilePath!),
+              height: 110,
+              fit: BoxFit.contain,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _card({required String title, required Widget child}) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 10),
+            child,
+          ],
+        ),
       ),
     );
   }
