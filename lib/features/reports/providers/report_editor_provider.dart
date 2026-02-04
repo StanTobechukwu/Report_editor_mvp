@@ -1,5 +1,4 @@
 import 'dart:math';
-
 import 'package:flutter/foundation.dart';
 
 import '../../../core/utils/ids.dart';
@@ -52,6 +51,29 @@ class ReportEditorProvider extends ChangeNotifier {
     return _findNodeById(_doc.roots, id) is ContentNode;
   }
 
+  /// ✅ UI helpers: obey "content is final generation" rules.
+  ///
+  /// - Can add subsection only when selection is a SectionNode AND it has NO content child.
+  /// - Can add content only when selection is a SectionNode AND it has NO subsection children AND NO content child.
+  bool get canAddSubsectionHere {
+    final id = _selectedNodeId;
+    if (id == null) return false;
+    final n = _findNodeById(_doc.roots, id);
+    if (n is! SectionNode) return false;
+    if (_sectionHasContentChild(n)) return false;
+    return true;
+  }
+
+  bool get canAddContentHere {
+    final id = _selectedNodeId;
+    if (id == null) return false;
+    final n = _findNodeById(_doc.roots, id);
+    if (n is! SectionNode) return false;
+    if (_sectionHasSectionChildren(n)) return false; // must be leaf
+    if (_sectionHasContentChild(n)) return false; // only one
+    return true;
+  }
+
   // =========================
   // Selection
   // =========================
@@ -87,32 +109,31 @@ class ReportEditorProvider extends ChangeNotifier {
     _selectedNodeId = null;
     notifyListeners();
   }
-void newReportFromTemplate(TemplateDoc template) {
-  final now = nowIso();
 
-  _doc = ReportDoc(
-    reportId: newId('rpt'),
-    createdAtIso: now,
-    updatedAtIso: now,
+  void newReportFromTemplate(TemplateDoc template) {
+    final now = nowIso();
 
-    // 🔥 FIX 1: deep clone
-    roots: template.roots
-        .map((s) => s.cloneNodeTree())
-        .toList(growable: false),
+    // 1) Deep-clone template structure
+    final cloned = template.roots.map((s) => s.cloneNodeTree()).toList(growable: false);
 
-    images: const [],
-    placementChoice: ImagePlacementChoice.attachmentsOnly,
-    signature: const SignatureBlock(),
+    // 2) Hydrate leaf sections with exactly one content node (Form Mode)
+    final hydrated = cloned.map(_hydrateTemplateSectionForForm).toList(growable: false);
 
-    subjectInfoDef: template.subjectInfo,
+    _doc = ReportDoc(
+      reportId: newId('rpt'),
+      createdAtIso: now,
+      updatedAtIso: now,
+      roots: hydrated,
+      images: const [],
+      placementChoice: ImagePlacementChoice.attachmentsOnly,
+      signature: const SignatureBlock(),
+      subjectInfoDef: template.subjectInfo,
+      subjectInfo: SubjectInfoValues.emptyFromDef(template.subjectInfo),
+    );
 
-    // 🔥 FIX 2: safe value initialization
-    subjectInfo: SubjectInfoValues.emptyFromDef(template.subjectInfo),
-  );
-
-  _selectedNodeId = null;
-  notifyListeners();
-}
+    _selectedNodeId = null;
+    notifyListeners();
+  }
 
   Future<void> save() async {
     _doc = _doc.copyWith(updatedAtIso: nowIso());
@@ -129,6 +150,50 @@ void newReportFromTemplate(TemplateDoc template) {
   Future<void> loadTemplateAndStartReport(String templateId) async {
     final template = await templatesRepo.loadTemplate(templateId);
     newReportFromTemplate(template);
+  }
+
+  // =========================
+  // ✅ Form Mode helper
+  // =========================
+
+  /// Ensures a leaf section has exactly ONE ContentNode.
+  /// Safe to call repeatedly (no duplicates created).
+  void ensureLeafHasContent(String sectionId) {
+    final s = _findSectionById(_doc.roots, sectionId);
+    if (s == null) return;
+
+    // only leaf sections get content
+    if (_sectionHasSectionChildren(s)) return;
+
+    final contentNodes = s.children.whereType<ContentNode>().toList();
+    if (contentNodes.isNotEmpty) {
+      // already has one -> enforce exactly one by keeping first
+      if (contentNodes.length == 1 && s.children.length == 1) return;
+
+      final keep = contentNodes.first;
+      _doc = _doc.copyWith(
+        roots: _updateSectionTree(
+          _doc.roots,
+          sectionId,
+          (sec) => sec.copyWith(children: [keep], collapsed: false),
+        ),
+        updatedAtIso: nowIso(),
+      );
+      notifyListeners();
+      return;
+    }
+
+    // create one
+    final newTxt = ContentNode(id: _id('txt'), text: '', indent: s.indent);
+    _doc = _doc.copyWith(
+      roots: _updateSectionTree(
+        _doc.roots,
+        sectionId,
+        (sec) => sec.copyWith(children: [newTxt], collapsed: false),
+      ),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
   }
 
   // =========================
@@ -184,7 +249,13 @@ void newReportFromTemplate(TemplateDoc template) {
     final fields = _doc.subjectInfoDef.fields;
     final target = fields.firstWhere(
       (f) => f.key == fieldKey,
-      orElse: () => const SubjectFieldDef(key: '', title: '', required: false, order: 0, isSystem: false),
+      orElse: () => const SubjectFieldDef(
+        key: '',
+        title: '',
+        required: false,
+        order: 0,
+        isSystem: false,
+      ),
     );
     if (target.key.isEmpty) return;
     if (target.isSystem) return;
@@ -263,29 +334,54 @@ void newReportFromTemplate(TemplateDoc template) {
     return 'custom_$chunk';
   }
 
+  // =========================
+  // Template save (ok as-is)
+  // =========================
+
   Future<void> saveAsTemplate({
-  required String name,
-  required bool includeContent,
-}) async {
-  final trimmed = name.trim();
-  if (trimmed.isEmpty) return;
+    required String name,
+    required bool includeContent,
+  }) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
 
-  final t = TemplateDoc(
-    templateId: newId('tpl'),
-    updatedAt: DateTime.now(),
-    name: trimmed,
+    final t = TemplateDoc(
+      templateId: newId('tpl'),
+      updatedAt: DateTime.now(),
+      name: trimmed,
+      roots: _doc.roots
+          .map((r) => r.toTemplateNode(includeContent: includeContent))
+          .toList(growable: false),
+      subjectInfo: _doc.subjectInfoDef,
+    );
 
-    // structure OR structure+content
-    roots: _doc.roots
-        .map((r) => r.toTemplateNode(includeContent: includeContent))
-        .toList(growable: false),
+    await templatesRepo.saveTemplate(t);
+  }
 
-    subjectInfo: _doc.subjectInfoDef,
-  );
+  // =========================
+  // Template -> Report hydration (Form Mode)
+  // =========================
 
-  await templatesRepo.saveTemplate(t);
-}
+  SectionNode _hydrateTemplateSectionForForm(SectionNode s) {
+    final sectionKids = s.children.whereType<SectionNode>().toList(growable: false);
+    if (sectionKids.isNotEmpty) {
+      return s.copyWith(
+        children: sectionKids.map(_hydrateTemplateSectionForForm).toList(growable: false),
+        collapsed: false,
+      );
+    }
 
+    // Leaf section: keep only the first ContentNode (if any), else create one.
+    final firstContent = s.children.whereType<ContentNode>().isNotEmpty
+        ? s.children.whereType<ContentNode>().first
+        : null;
+
+    final content = firstContent ?? ContentNode(id: _id('txt'), text: '', indent: s.indent);
+    return s.copyWith(children: [content], collapsed: false);
+  }
+
+  bool _sectionHasSectionChildren(SectionNode s) => s.children.any((n) => n is SectionNode);
+  bool _sectionHasContentChild(SectionNode s) => s.children.any((n) => n is ContentNode);
 
   // =========================
   // Tree: IDs
@@ -310,9 +406,6 @@ void newReportFromTemplate(TemplateDoc template) {
     notifyListeners();
   }
 
-  /// Add same-level section after the selected node.
-  /// - If selected is root section: insert in roots.
-  /// - If selected is nested section/content: insert as sibling under the same parent section.
   void addSameLevelSection(String title) {
     final t = title.trim();
     final targetId = _selectedNodeId;
@@ -320,15 +413,16 @@ void newReportFromTemplate(TemplateDoc template) {
 
     final newSec = SectionNode(id: _id('sec'), title: t);
 
-    final nextRoots = _insertSibling(_doc.roots, targetId, newSec);
+    final selected = _findNodeById(_doc.roots, targetId);
+    final effectiveTargetId = (selected is ContentNode)
+        ? _findOwningSectionId(_doc.roots, targetId) ?? targetId
+        : targetId;
+
+    final nextRoots = _insertSibling(_doc.roots, effectiveTargetId, newSec);
     _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
     notifyListeners();
   }
 
-  /// Wrap selected SECTION in a new parent SECTION.
-  /// - Only works if selected is SectionNode.
-  /// - Wrapper replaces the selected node in place.
-  /// - Slight auto-indentation applied (child subtree indent +1).
   void wrapSelectedSection(String wrapperTitle) {
     final t = wrapperTitle.trim();
     final targetId = _selectedNodeId;
@@ -345,7 +439,7 @@ void newReportFromTemplate(TemplateDoc template) {
       indent: node.indent,
       children: [wrappedChild],
       collapsed: false,
-      style: node.style, // keeps consistent style; adjust later if desired
+      style: node.style,
     );
 
     final nextRoots = _replaceNode(_doc.roots, targetId, wrapper);
@@ -353,7 +447,6 @@ void newReportFromTemplate(TemplateDoc template) {
     notifyListeners();
   }
 
-  /// Delete selected node (section or content).
   void deleteSelected() {
     final targetId = _selectedNodeId;
     if (targetId == null) return;
@@ -367,45 +460,33 @@ void newReportFromTemplate(TemplateDoc template) {
   // =========================
   // Tree: Add Here (context)
   // =========================
-  //
-  // Rules:
-  // If selected node is SectionNode:
-  //   - Add subsection => CHILD SectionNode
-  //   - Add content    => CHILD ContentNode
-  //
-  // If selected node is ContentNode:
-  //   - Add subsection => SIBLING SectionNode (same parent)
-  //   - Add content    => SIBLING ContentNode (same parent)
 
+  /// ✅ NEW RULES ENFORCED:
+  /// - You can’t add a subsection if the section already has content.
+  /// - You can’t add content if the section has subsections.
+  /// - Only one content per section.
+  /// - Selection being a ContentNode does NOT allow adding more content/subsections.
   void addHereSubsection(String title) {
     final t = title.trim();
     final targetId = _selectedNodeId;
     if (t.isEmpty || targetId == null) return;
 
     final selected = _findNodeById(_doc.roots, targetId);
+    if (selected is! SectionNode) return;
+
+    if (_sectionHasContentChild(selected)) return; // content is final
+
     final newSec = SectionNode(id: _id('sec'), title: t);
 
-    if (selected is SectionNode) {
-      // child
-      _doc = _doc.copyWith(
-        roots: _updateSectionTree(
-          _doc.roots,
-          targetId,
-          (s) => s.copyWith(children: [...s.children, newSec], collapsed: false),
-        ),
-        updatedAtIso: nowIso(),
-      );
-      notifyListeners();
-      return;
-    }
-
-    if (selected is ContentNode) {
-      // sibling
-      final nextRoots = _insertSibling(_doc.roots, targetId, newSec);
-      _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
-      notifyListeners();
-      return;
-    }
+    _doc = _doc.copyWith(
+      roots: _updateSectionTree(
+        _doc.roots,
+        targetId,
+        (s) => s.copyWith(children: [...s.children, newSec], collapsed: false),
+      ),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
   }
 
   void addHereContent({String initialText = ''}) {
@@ -413,29 +494,23 @@ void newReportFromTemplate(TemplateDoc template) {
     if (targetId == null) return;
 
     final selected = _findNodeById(_doc.roots, targetId);
-    final newTxt = ContentNode(id: _id('txt'), text: initialText);
+    if (selected is! SectionNode) return;
 
-    if (selected is SectionNode) {
-      // child
-      _doc = _doc.copyWith(
-        roots: _updateSectionTree(
-          _doc.roots,
-          targetId,
-          (s) => s.copyWith(children: [...s.children, newTxt], collapsed: false),
-        ),
-        updatedAtIso: nowIso(),
-      );
-      notifyListeners();
-      return;
-    }
+    if (_sectionHasSectionChildren(selected)) return; // must be leaf
+    if (_sectionHasContentChild(selected)) return; // only one
 
-    if (selected is ContentNode) {
-      // sibling
-      final nextRoots = _insertSibling(_doc.roots, targetId, newTxt);
-      _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
-      notifyListeners();
-      return;
-    }
+    final newTxt = ContentNode(id: _id('txt'), text: initialText, indent: selected.indent);
+
+    // leaf section -> set children to exactly [content]
+    _doc = _doc.copyWith(
+      roots: _updateSectionTree(
+        _doc.roots,
+        targetId,
+        (s) => s.copyWith(children: [newTxt], collapsed: false),
+      ),
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
   }
 
   // =========================
@@ -490,7 +565,7 @@ void newReportFromTemplate(TemplateDoc template) {
   }
 
   // =========================
-  // Images
+  // Images / Signature (unchanged)
   // =========================
 
   void setPlacementChoice(ImagePlacementChoice choice) {
@@ -531,10 +606,6 @@ void newReportFromTemplate(TemplateDoc template) {
     notifyListeners();
   }
 
-  // =========================
-  // Signature / Signer
-  // =========================
-
   void updateSigner({String? roleTitle, String? name, String? credentials}) {
     _doc = _doc.copyWith(
       signature: _doc.signature.copyWith(
@@ -556,7 +627,7 @@ void newReportFromTemplate(TemplateDoc template) {
   }
 
   // =========================
-  // Tree helpers (existing)
+  // Tree helpers
   // =========================
 
   List<SectionNode> _updateSectionTree(
@@ -606,10 +677,6 @@ void newReportFromTemplate(TemplateDoc template) {
     return roots.map((s) => s.copyWith(children: walk(s.children))).toList();
   }
 
-  // =========================
-  // Tree helpers (NEW)
-  // =========================
-
   Node? _findNodeById(List<SectionNode> roots, String id) {
     for (final s in roots) {
       if (s.id == id) return s;
@@ -617,6 +684,11 @@ void newReportFromTemplate(TemplateDoc template) {
       if (found != null) return found;
     }
     return null;
+  }
+
+  SectionNode? _findSectionById(List<SectionNode> roots, String id) {
+    final n = _findNodeById(roots, id);
+    return (n is SectionNode) ? n : null;
   }
 
   Node? _findNodeInChildren(List<Node> children, String id) {
@@ -630,9 +702,26 @@ void newReportFromTemplate(TemplateDoc template) {
     return null;
   }
 
-  /// Insert sibling after a target node id (works for roots + nested).
+  String? _findOwningSectionId(List<SectionNode> roots, String nodeId) {
+    for (final s in roots) {
+      final found = _findOwningSectionIdInSection(s, nodeId);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  String? _findOwningSectionIdInSection(SectionNode section, String nodeId) {
+    for (final n in section.children) {
+      if (n.id == nodeId) return section.id;
+      if (n is SectionNode) {
+        final found = _findOwningSectionIdInSection(n, nodeId);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
   List<SectionNode> _insertSibling(List<SectionNode> roots, String targetId, Node newNode) {
-    // root-level insert
     for (int i = 0; i < roots.length; i++) {
       if (roots[i].id == targetId && newNode is SectionNode) {
         final next = [...roots];
@@ -641,7 +730,6 @@ void newReportFromTemplate(TemplateDoc template) {
       }
     }
 
-    // nested insert
     return roots.map((s) => s.copyWith(children: _insertSiblingInChildren(s.children, targetId, newNode))).toList();
   }
 
@@ -665,9 +753,7 @@ void newReportFromTemplate(TemplateDoc template) {
     return children;
   }
 
-  /// Replace a node (root or nested) by id.
   List<SectionNode> _replaceNode(List<SectionNode> roots, String targetId, SectionNode replacement) {
-    // root replace
     for (int i = 0; i < roots.length; i++) {
       if (roots[i].id == targetId) {
         final next = [...roots];
@@ -676,7 +762,6 @@ void newReportFromTemplate(TemplateDoc template) {
       }
     }
 
-    // nested replace
     return roots.map((s) => s.copyWith(children: _replaceNodeInChildren(s.children, targetId, replacement))).toList();
   }
 
@@ -700,16 +785,13 @@ void newReportFromTemplate(TemplateDoc template) {
     return children;
   }
 
-  /// Delete a node (root or nested) by id.
   List<SectionNode> _deleteNode(List<SectionNode> roots, String targetId) {
-    // root delete
     final rootIndex = roots.indexWhere((s) => s.id == targetId);
     if (rootIndex != -1) {
       final next = [...roots]..removeAt(rootIndex);
       return next;
     }
 
-    // nested delete
     return roots.map((s) => s.copyWith(children: _deleteNodeInChildren(s.children, targetId))).toList();
   }
 
@@ -720,7 +802,6 @@ void newReportFromTemplate(TemplateDoc template) {
       return next;
     }
 
-    // recurse
     for (int i = 0; i < children.length; i++) {
       final n = children[i];
       if (n is SectionNode) {
@@ -736,7 +817,6 @@ void newReportFromTemplate(TemplateDoc template) {
     return children;
   }
 
-  /// Shift indent for an entire section subtree (including nested children)
   SectionNode _shiftIndentSectionSubtree(SectionNode node, int delta) {
     int clampIndent(int v) => v.clamp(0, 20);
 
