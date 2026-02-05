@@ -31,10 +31,13 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   late final TextEditingController _credentialsC;
 
   bool _hintShown = false;
-
-  // Form Mode = natural fillable form UI.
-  // Editor Mode = outline/structure editor UI.
   bool _editorMode = false;
+
+  // Spacing constants (professional rhythm)
+  static const _pagePad = 16.0;
+  static const _cardPad = 16.0;
+  static const _gap = 12.0;
+  static const _bigGap = 16.0;
 
   @override
   void initState() {
@@ -138,16 +141,22 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
         title: Text(title),
         content: TextField(
           controller: c,
-          decoration: InputDecoration(hintText: hint),
+          decoration: InputDecoration(
+            hintText: hint,
+            border: const OutlineInputBorder(),
+            isDense: true,
+          ),
           autofocus: true,
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, c.text),
-              child: const Text('OK')),
+            onPressed: () => Navigator.pop(context, c.text),
+            child: const Text('OK'),
+          ),
         ],
       ),
     );
@@ -180,6 +189,84 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
         ],
       ),
     );
+  }
+
+  // ---------------- Subject Info dialogs / sheets (RESTORED) ----------------
+
+  Future<void> _addSubjectFieldDialog(ReportEditorProvider vm) async {
+    final titleC = TextEditingController();
+    bool required = false;
+
+    final res = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: const Text('Add Subject Field'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleC,
+                decoration: const InputDecoration(
+                  labelText: 'Field title (e.g., Address)',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                autofocus: true,
+              ),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                value: required,
+                onChanged: (v) => setLocal(() => required = v ?? false),
+                title: const Text('Required'),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final titleText = titleC.text.trim();
+    titleC.dispose();
+
+    if (res != true) return;
+
+    vm.addSubjectField(
+      title: titleText.isEmpty ? 'New field' : titleText,
+      required: required,
+    );
+
+    if (!mounted) return;
+    setState(() => _subjectErrors = _validateSubjectInfo(vm));
+  }
+
+  Future<void> _editSubjectFieldsSheet(ReportEditorProvider vm) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: _SubjectFieldsEditor(vm: vm),
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() => _subjectErrors = _validateSubjectInfo(vm));
   }
 
   // ---------------- Global Add (structure) ----------------
@@ -263,11 +350,13 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           content: const Text('This cannot be undone.'),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Delete')),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete'),
+            ),
           ],
         ),
       );
@@ -353,11 +442,13 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text(
-                  'Tip: Tap a section, then use Add here for content/subsections.')),
+            content: Text('Tip: Tap a section, then use Add here for content/subsections.'),
+          ),
         );
       });
     }
+
+    final outlineMinHeight = MediaQuery.of(context).size.height * 0.42;
 
     return Scaffold(
       appBar: AppBar(
@@ -365,12 +456,9 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
         actions: [
           IconButton(
             tooltip: _editorMode ? 'Switch to Form Mode' : 'Switch to Editor Mode',
-            icon:
-                Icon(_editorMode ? Icons.description_outlined : Icons.edit_note_outlined),
+            icon: Icon(_editorMode ? Icons.description_outlined : Icons.edit_note_outlined),
             onPressed: () => setState(() => _editorMode = !_editorMode),
           ),
-
-
           IconButton(
             tooltip: 'Preview',
             icon: const Icon(Icons.preview_outlined),
@@ -379,8 +467,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
               if (errs.isNotEmpty) {
                 setState(() => _subjectErrors = errs);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Please complete required Subject Info fields.')),
+                  const SnackBar(content: Text('Please complete required Subject Info fields.')),
                 );
                 return;
               }
@@ -390,15 +477,16 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
               );
             },
           ),
-
-          // Save template only in Editor Mode
           if (_editorMode)
             IconButton(
               tooltip: 'Save as template',
               icon: const Icon(Icons.bookmark_add_outlined),
               onPressed: () async {
-                final name = await _promptText(context, 'Template name',
-                    hint: 'e.g., Upper GI Template');
+                final name = await _promptText(
+                  context,
+                  'Template name',
+                  hint: 'e.g., Upper GI Template',
+                );
                 if (name == null || name.trim().isEmpty) return;
 
                 final includeContent = await askTemplateSaveMode(context);
@@ -410,61 +498,97 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                 );
 
                 if (!context.mounted) return;
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('Template saved')));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Template saved')),
+                );
               },
             ),
         ],
       ),
 
       floatingActionButton: _editorMode
-          ? FloatingActionButton.extended(
-              onPressed: () => _showGlobalAddSheet(context, vm),
-              icon: const Icon(Icons.add),
-              label: const Text('Add'),
-            )
-          : null,
+    ? FloatingActionButton(
+        onPressed: () async {
+          if (vm.selectedNodeId == null) {
+            // ➕ Quick add top-level
+            final title = await _promptText(context, 'New top-level section');
+            if (title != null && title.trim().isNotEmpty) {
+              vm.addTopLevelSection(title);
+            }
+          } else {
+            // ⚙ Contextual actions (same-level, wrap, delete...)
+            await _showGlobalAddSheet(context, vm);
+          }
+        },
+        child: Icon(vm.selectedNodeId == null ? Icons.add : Icons.tune),
+      )
+    : null,
 
       body: GestureDetector(
         onTap: vm.clearSelection,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(_pagePad),
           children: [
             _subjectInfoCard(vm),
-            const SizedBox(height: 12),
+            const SizedBox(height: _bigGap),
 
-            if (_editorMode)
-              _card(
-                title: 'Outline',
-                child: Column(
-                  children: [
-                    if (vm.doc.roots.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 18),
-                        child: Text('No sections yet. Tap Add to create the first section.'),
-                      ),
-                    ...vm.doc.roots.map((s) => _sectionWidget(context, vm, s)),
-                  ],
-                ),
-              )
-            else
-              _card(
-                title: 'Form',
-                child: vm.doc.roots.isEmpty
-                    ? const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 18),
-                        child: Text('This template has no sections yet.'),
-                      )
-                    : Column(
-                        children: vm.doc.roots
-                            .map((s) => _formSection(context, vm, s))
-                            .toList(growable: false),
-                      ),
-              ),
-
+            // ✅ More prominent + slightly taller card
+            _card(
+              title: _editorMode ? 'Outline' : 'Form',
+              emphasized: true,
+              minHeight: outlineMinHeight,
+              child: _editorMode
+                  ? Column(
+                      children: [
+                        if (vm.doc.roots.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 18),
+                            child: Text('No sections yet. Tap Add to create the first section.'),
+                          ),
+                        ...vm.doc.roots.map((s) => _sectionWidget(context, vm, s)),
+                      ],
+                    )
+                  : vm.doc.roots.isEmpty
+    ? Padding(
+        padding: const EdgeInsets.symmetric(vertical: 28),
+        child: Column(
+          children: [
+            const Icon(
+              Icons.edit_note_outlined,
+              size: 42,
+              color: Colors.grey,
+            ),
             const SizedBox(height: 12),
+            const Text(
+              'No sections yet',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Switch to Edit Mode to start creating your template.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.edit),
+              label: const Text('Go to Edit Mode'),
+              onPressed: () => setState(() => _editorMode = true),
+            ),
+          ],
+        ),
+      )
+
+                      : Column(
+                          children: vm.doc.roots
+                              .map((s) => _formSection(context, vm, s))
+                              .toList(growable: false),
+                        ),
+            ),
+
+            const SizedBox(height: _bigGap),
             _imagesCard(context, vm),
-            const SizedBox(height: 12),
+            const SizedBox(height: _bigGap),
             _card(title: 'Signer', child: _signerCard(vm)),
           ],
         ),
@@ -473,9 +597,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   }
 
   // ---------------- Form Mode UI ----------------
-  // IMPORTANT:
-  // - Container sections: display only their subsection titles + recurse
-  // - Leaf sections: always display exactly ONE content field
+
   Widget _formSection(BuildContext context, ReportEditorProvider vm, SectionNode s) {
     final sectionChildren = s.children.whereType<SectionNode>().toList(growable: false);
     final contentChildren = s.children.whereType<ContentNode>().toList(growable: false);
@@ -490,10 +612,9 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       ),
     );
 
-    // Container section -> recurse
     if (sectionChildren.isNotEmpty) {
       return Padding(
-        padding: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.only(bottom: _bigGap),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -504,16 +625,14 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       );
     }
 
-    // Leaf section -> must have exactly one content node
     if (contentChildren.isEmpty) {
-      // ✅ create content once (provider enforces "exactly one")
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         vm.ensureLeafHasContent(s.id);
       });
 
       return Padding(
-        padding: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.only(bottom: _bigGap),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -537,7 +656,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     final c = _contentControllerFor(node.id, node.text);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: _bigGap),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -550,6 +669,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
                 hintText: 'Enter text…',
+                isDense: true,
               ),
               onChanged: (v) => vm.updateContent(node.id, v),
             ),
@@ -559,7 +679,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     );
   }
 
-  // ---------------- Subject Info UI ----------------
+  // ---------------- Subject Info UI (BUTTONS RESTORED) ----------------
 
   Widget _subjectInfoCard(ReportEditorProvider vm) {
     final def = vm.subjectInfoDef;
@@ -594,6 +714,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             labelText: f.required ? '${f.title} *' : f.title,
             errorText: err,
             border: const OutlineInputBorder(),
+            isDense: true,
           ),
           onChanged: (v) {
             vm.updateSubjectInfoValue(f.key, v);
@@ -613,8 +734,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           return Wrap(
             spacing: 12,
             runSpacing: 0,
-            children:
-                fieldWidgets.map((w) => SizedBox(width: half, child: w)).toList(),
+            children: fieldWidgets.map((w) => SizedBox(width: half, child: w)).toList(),
           );
         },
       );
@@ -627,9 +747,10 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ✅ Wrap keeps buttons visible on all screen sizes
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: 10,
+            runSpacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Row(
@@ -639,7 +760,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                     value: def.enabled,
                     onChanged: vm.setSubjectInfoEnabled,
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 8),
                   SegmentedButton<int>(
                     segments: const [
                       ButtonSegment(value: 1, label: Text('1 col')),
@@ -650,9 +771,23 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                   ),
                 ],
               ),
+
+              // ✅ RESTORED
+              OutlinedButton.icon(
+                onPressed: () => _editSubjectFieldsSheet(vm),
+                icon: const Icon(Icons.tune),
+                label: const Text('Fields'),
+              ),
+
+              // ✅ RESTORED
+              FilledButton.icon(
+                onPressed: () => _addSubjectFieldDialog(vm),
+                icon: const Icon(Icons.add),
+                label: const Text('Add field'),
+              ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: _bigGap),
           body,
         ],
       ),
@@ -664,7 +799,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   Widget _contextAddHereButton(BuildContext context, ReportEditorProvider vm) {
     final accent = _accent(context);
     return Padding(
-      padding: const EdgeInsets.only(left: 40, top: 6),
+      padding: const EdgeInsets.only(left: 40, top: 8),
       child: FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: accent),
         onPressed: () => _showAddHereSheet(context, vm),
@@ -673,111 +808,185 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       ),
     );
   }
+Widget _sectionWidget(BuildContext context, ReportEditorProvider vm, SectionNode section) {
+  final accent = _accent(context);
 
-  Widget _sectionWidget(BuildContext context, ReportEditorProvider vm, SectionNode section) {
-    final indent = (section.indent) * 16.0;
-    final selected = vm.selectedNodeId == section.id;
-    final hasChildren = section.children.isNotEmpty;
-    final accent = _accent(context);
+  final selected = vm.selectedNodeId == section.id;
+  final hasChildren = section.children.isNotEmpty;
 
-    final style = TextStyle(
-      fontWeight: section.style.bold ? FontWeight.w800 : FontWeight.w600,
-      fontSize: section.style.level == HeadingLevel.h1
-          ? 18
-          : section.style.level == HeadingLevel.h2
-              ? 16
-              : 14,
-    );
+  final sectionIndent = section.indent * 16.0;
 
-    final align = switch (section.style.align) {
-      TitleAlign.left => Alignment.centerLeft,
-      TitleAlign.center => Alignment.center,
-      TitleAlign.right => Alignment.centerRight,
-    };
+  final titleStyle = TextStyle(
+    fontWeight: section.style.bold ? FontWeight.w800 : FontWeight.w600,
+    fontSize: section.style.level == HeadingLevel.h1
+        ? 18
+        : section.style.level == HeadingLevel.h2
+            ? 16
+            : 14,
+  );
 
-    return Padding(
-      padding: EdgeInsets.only(left: indent, top: 8),
-      child: Column(
-        children: [
-          Material(
-            color: selected ? accent.withOpacity(0.10) : Colors.transparent,
+  final titleAlign = switch (section.style.align) {
+    TitleAlign.left => Alignment.centerLeft,
+    TitleAlign.center => Alignment.center,
+    TitleAlign.right => Alignment.centerRight,
+  };
+
+  // Should show Delete Content?
+  final sectionHasContent = section.children.any((n) => n is ContentNode);
+  final sectionHasSubsections = section.children.any((n) => n is SectionNode);
+
+  // "Add here" enabled only if:
+  // - selected
+  // - and provider says can add something
+  final canAddHere = selected && (vm.canAddSubsectionHere || vm.canAddContentHere);
+
+  // If section has content already, "Add here" is useless.
+  // Show Delete Content (only when selected and it is a leaf with content).
+  final showDeleteContent = selected && sectionHasContent && !sectionHasSubsections;
+
+  return Padding(
+    padding: EdgeInsets.only(left: sectionIndent, top: 10),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ---------------- Section Row ----------------
+        Material(
+          color: selected
+              ? accent.withOpacity(0.10) // stronger when selected
+              : accent.withOpacity(0.04), // always slightly tinted
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
             borderRadius: BorderRadius.circular(14),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () => vm.selectNode(section.id),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                child: Row(
-                  children: [
-                    if (hasChildren)
-                      InkWell(
-                        onTap: () => vm.toggleCollapsed(section.id),
-                        child: Icon(section.collapsed
-                            ? Icons.chevron_right
-                            : Icons.expand_more),
-                      )
-                    else
-                      const SizedBox(width: 24),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Align(
-                        alignment: align,
-                        child: Text(section.title, style: style),
+            onTap: () => vm.selectNode(section.id),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              child: Row(
+                children: [
+                  // collapse icon (left)
+                  if (hasChildren)
+                    InkWell(
+                      onTap: () => vm.toggleCollapsed(section.id),
+                      child: Icon(
+                        section.collapsed ? Icons.chevron_right : Icons.expand_more,
                       ),
+                    )
+                  else
+                    const SizedBox(width: 24),
+
+                  const SizedBox(width: 6),
+
+                  // title
+                  Expanded(
+                    child: Align(
+                      alignment: titleAlign,
+                      child: Text(section.title, style: titleStyle),
                     ),
-                  ],
-                ),
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  // ✅ small touch/select hint icon on right
+                  Icon(
+                    selected ? Icons.touch_app : Icons.touch_app_outlined,
+                    size: 18,
+                    color: selected ? accent : Colors.black54,
+                  ),
+                ],
               ),
             ),
           ),
+        ),
 
-          if (selected) _contextAddHereButton(context, vm),
+        const SizedBox(height: 8),
 
-          if (!section.collapsed)
-            ...section.children.map((child) {
-              if (child is ContentNode) {
-                final childIndent = (child.indent) * 16.0;
-                final contentSelected = vm.selectedNodeId == child.id;
-                final c = _contentControllerFor(child.id, child.text);
-
-                return Padding(
-                  padding: EdgeInsets.only(left: childIndent + 26, top: 8),
-                  child: Column(
-                    children: [
-                      Material(
-                        color: contentSelected
-                            ? accent.withOpacity(0.07)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(12),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(12),
-                          onTap: () => vm.selectNode(child.id),
-                          child: Padding(
-                            padding: const EdgeInsets.all(6),
-                            child: TextField(
-                              controller: c,
-                              minLines: 2,
-                              maxLines: 6,
-                              decoration: const InputDecoration(
-                                border: OutlineInputBorder(),
-                                hintText: 'Enter text…',
-                              ),
-                              onChanged: (v) => vm.updateContent(child.id, v),
-                            ),
-                          ),
+        // ---------------- ALWAYS-visible action row ----------------
+        // ✅ Visible even when disabled: teaches user to tap section first.
+        Padding(
+          padding: const EdgeInsets.only(left: 24),
+          child: Row(
+            children: [
+              Expanded(
+                child: showDeleteContent
+                    ? OutlinedButton.icon(
+                        onPressed: () => vm.deleteContentForSelectedSection(),
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Delete content'),
+                      )
+                    : FilledButton.icon(
+                        // Disabled if not selected or cannot add
+                        onPressed: canAddHere ? () => _showAddHereSheet(context, vm) : null,
+                        icon: const Icon(Icons.add),
+                        label: Text(
+                          selected ? 'Add here' : 'Tap section to enable Add here',
                         ),
                       ),
-                      if (contentSelected) _contextAddHereButton(context, vm),
-                    ],
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 8),
+
+        // ---------------- Children ----------------
+        if (!section.collapsed)
+          ...section.children.map((child) {
+            if (child is ContentNode) {
+              // ✅ alignment fix: content aligns under section row consistently
+              final contentLeft = sectionIndent + 24;
+
+              final c = _contentControllerFor(child.id, child.text);
+
+              return Padding(
+                padding: EdgeInsets.only(left: contentLeft, top: 8),
+                child: Material(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    // content tap still selects (optional)
+                    onTap: () => vm.selectNode(section.id), // keep selection on SECTION
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: TextField(
+                        controller: c,
+                        minLines: 2,
+                        maxLines: 6,
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          hintText: 'Enter text…',
+                        ),
+                        onChanged: (v) => vm.updateContent(child.id, v),
+                      ),
+                    ),
                   ),
-                );
-              }
-              if (child is SectionNode) return _sectionWidget(context, vm, child);
-              return const SizedBox.shrink();
-            }),
-        ],
-      ),
+                ),
+              );
+            }
+
+            if (child is SectionNode) return _sectionWidget(context, vm, child);
+
+            return const SizedBox.shrink();
+          }),
+      ],
+    ),
+  );
+}
+
+
+  Future<void> _showSectionEditMenu(BuildContext context, ReportEditorProvider vm, SectionNode section) async {
+    final res = await showModalBottomSheet<_SectionEditResult>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => _SectionEditSheet(section: section),
     );
+    if (res == null) return;
+
+    if (res.rename != null && res.rename!.trim().isNotEmpty) {
+      vm.renameSection(section.id, res.rename!);
+    }
+    if (res.style != null) {
+      vm.updateSectionStyle(section.id, res.style!);
+    }
   }
 
   // ---------------- Other UI blocks ----------------
@@ -785,6 +994,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   Widget _imagesCard(BuildContext context, ReportEditorProvider vm) {
     return Card(
       child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         title: const Text('Images'),
         subtitle: Text(
           'Selected: ${vm.doc.images.length} • '
@@ -817,26 +1027,32 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           decoration: const InputDecoration(
             labelText: 'Title (e.g., Reporter, Endoscopist, Radiologist)',
             border: OutlineInputBorder(),
+            isDense: true,
           ),
           controller: _roleTitleC,
           onChanged: (v) => vm.updateSigner(roleTitle: v),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: _gap),
         TextField(
-          decoration: const InputDecoration(labelText: 'Name', border: OutlineInputBorder()),
+          decoration: const InputDecoration(
+            labelText: 'Name',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
           controller: _signerNameC,
           onChanged: (v) => vm.updateSigner(name: v),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: _gap),
         TextField(
           decoration: const InputDecoration(
             labelText: 'Credentials (optional)',
             border: OutlineInputBorder(),
+            isDense: true,
           ),
           controller: _credentialsC,
           onChanged: (v) => vm.updateSigner(credentials: v),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: _gap),
         Row(
           children: [
             Expanded(
@@ -857,7 +1073,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           ],
         ),
         if (vm.doc.signature.signatureFilePath != null) ...[
-          const SizedBox(height: 10),
+          const SizedBox(height: _gap),
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: Image.file(
@@ -871,16 +1087,36 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     );
   }
 
-  Widget _card({required String title, required Widget child}) {
+  Widget _card({
+    required String title,
+    required Widget child,
+    bool emphasized = false,
+    double? minHeight,
+  }) {
+    final border = emphasized
+        ? BorderSide(color: Theme.of(context).dividerColor.withOpacity(0.7), width: 1)
+        : BorderSide.none;
+
     return Card(
+      elevation: emphasized ? 2.5 : 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: border,
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(_cardPad),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 10),
-            child,
+            const SizedBox(height: 12),
+            if (minHeight != null)
+              ConstrainedBox(
+                constraints: BoxConstraints(minHeight: minHeight),
+                child: child,
+              )
+            else
+              child,
           ],
         ),
       ),
@@ -888,7 +1124,231 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   }
 }
 
-// ---------------- Images Manager ----------------
+// ---------------- Subject Fields Editor (RESTORED) ----------------
+
+class _SubjectFieldsEditor extends StatefulWidget {
+  final ReportEditorProvider vm;
+  const _SubjectFieldsEditor({required this.vm});
+
+  @override
+  State<_SubjectFieldsEditor> createState() => _SubjectFieldsEditorState();
+}
+
+class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
+  void _renameDialog(String fieldKey, String currentTitle) {
+    final c = TextEditingController(text: currentTitle);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Rename field'),
+        content: TextField(
+          controller: c,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final t = c.text.trim().isEmpty ? currentTitle : c.text.trim();
+              widget.vm.renameSubjectField(fieldKey, t);
+              Navigator.pop(context);
+              setState(() {});
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    ).then((_) => c.dispose());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = widget.vm;
+    final fields = vm.subjectInfoDef.orderedFields;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const ListTile(
+          title: Text('Subject Fields'),
+          subtitle: Text('Add, rename, reorder, set required.'),
+        ),
+        Flexible(
+          child: ReorderableListView.builder(
+            shrinkWrap: true,
+            itemCount: fields.length,
+            onReorder: (oldIndex, newIndex) {
+              vm.reorderSubjectFields(oldIndex, newIndex);
+              setState(() {});
+            },
+            itemBuilder: (_, i) {
+              final f = fields[i];
+              return ListTile(
+                key: ValueKey(f.key),
+                title: Text(f.title),
+                subtitle: Text(f.isSystem ? 'System field' : 'Custom field'),
+                leading: const Icon(Icons.drag_handle),
+                trailing: Wrap(
+                  spacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Checkbox(
+                      value: f.required,
+                      onChanged: (v) {
+                        vm.toggleSubjectRequired(f.key, v ?? false);
+                        setState(() {});
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Rename',
+                      icon: const Icon(Icons.edit),
+                      onPressed: () => _renameDialog(f.key, f.title),
+                    ),
+                    if (!f.isSystem)
+                      IconButton(
+                        tooltip: 'Delete',
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () {
+                          vm.removeSubjectField(f.key);
+                          setState(() {});
+                        },
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------- Section edit sheet (RESTORED) ----------------
+
+class _SectionEditResult {
+  final String? rename;
+  final TitleStyle? style;
+  const _SectionEditResult({this.rename, this.style});
+}
+
+class _SectionEditSheet extends StatefulWidget {
+  final SectionNode section;
+  const _SectionEditSheet({required this.section});
+
+  @override
+  State<_SectionEditSheet> createState() => _SectionEditSheetState();
+}
+
+class _SectionEditSheetState extends State<_SectionEditSheet> {
+  late final TextEditingController _title;
+  late HeadingLevel _level;
+  late bool _bold;
+  late TitleAlign _align;
+
+  @override
+  void initState() {
+    super.initState();
+    _title = TextEditingController(text: widget.section.title);
+    _level = widget.section.style.level;
+    _bold = widget.section.style.bold;
+    _align = widget.section.style.align;
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('Edit section')),
+            TextField(
+              controller: _title,
+              decoration: const InputDecoration(
+                labelText: 'Title',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<HeadingLevel>(
+                    value: _level,
+                    decoration: const InputDecoration(
+                      labelText: 'Size',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: HeadingLevel.values
+                        .map((h) => DropdownMenuItem(value: h, child: Text(h.name.toUpperCase())))
+                        .toList(),
+                    onChanged: (v) => setState(() => _level = v ?? _level),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonFormField<TitleAlign>(
+                    value: _align,
+                    decoration: const InputDecoration(
+                      labelText: 'Align',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: TitleAlign.values
+                        .map((a) => DropdownMenuItem(value: a, child: Text(a.name)))
+                        .toList(),
+                    onChanged: (v) => setState(() => _align = v ?? _align),
+                  ),
+                ),
+              ],
+            ),
+            SwitchListTile(
+              value: _bold,
+              onChanged: (v) => setState(() => _bold = v),
+              title: const Text('Bold title'),
+              contentPadding: EdgeInsets.zero,
+            ),
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(
+                  context,
+                  _SectionEditResult(
+                    rename: _title.text.trim(),
+                    style: widget.section.style.copyWith(level: _level, bold: _bold, align: _align),
+                  ),
+                );
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------- Images Manager (UNCHANGED) ----------------
 
 class _ImagesManager extends StatefulWidget {
   final ReportEditorProvider vm;

@@ -563,6 +563,68 @@ class ReportEditorProvider extends ChangeNotifier {
     );
     notifyListeners();
   }
+// =========================
+// Delete single content node (NEW)
+// =========================
+
+/// Removes a ContentNode from its parent section.
+/// Used when user taps "Delete content" in outline.
+/// Safe: only deletes that content, keeps section.
+void deleteContentNode(String contentId) {
+  List<Node> walk(List<Node> children) {
+    return children.where((n) {
+      // remove only the targeted content
+      return !(n is ContentNode && n.id == contentId);
+    }).map((n) {
+      if (n is SectionNode) {
+        return n.copyWith(children: walk(n.children));
+      }
+      return n;
+    }).toList();
+  }
+
+  _doc = _doc.copyWith(
+    roots: _doc.roots.map((s) => s.copyWith(children: walk(s.children))).toList(),
+    updatedAtIso: nowIso(),
+  );
+
+  // reset selection to avoid stale id
+  _selectedNodeId = null;
+
+  notifyListeners();
+}
+bool get selectedSectionHasContent {
+  final id = _selectedNodeId;
+  if (id == null) return false;
+
+  final n = _findNodeById(_doc.roots, id);
+  if (n is! SectionNode) return false;
+
+  return n.children.any((c) => c is ContentNode);
+}
+
+void deleteContentForSelectedSection() {
+  final id = _selectedNodeId;
+  if (id == null) return;
+
+  final n = _findNodeById(_doc.roots, id);
+  if (n is! SectionNode) return;
+
+  // Only leaf sections should hold content
+  if (_sectionHasSectionChildren(n)) return;
+
+  _doc = _doc.copyWith(
+    roots: _updateSectionTree(
+      _doc.roots,
+      id,
+      (s) => s.copyWith(children: const [], collapsed: false),
+    ),
+    updatedAtIso: nowIso(),
+  );
+
+  notifyListeners();
+}
+
 
   // =========================
   // Images / Signature (unchanged)
