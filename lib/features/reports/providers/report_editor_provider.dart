@@ -51,28 +51,27 @@ class ReportEditorProvider extends ChangeNotifier {
     return _findNodeById(_doc.roots, id) is ContentNode;
   }
 
-  /// ✅ UI helpers: obey "content is final generation" rules.
-  ///
-  /// - Can add subsection only when selection is a SectionNode AND it has NO content child.
-  /// - Can add content only when selection is a SectionNode AND it has NO subsection children AND NO content child.
-  bool get canAddSubsectionHere {
-    final id = _selectedNodeId;
-    if (id == null) return false;
-    final n = _findNodeById(_doc.roots, id);
-    if (n is! SectionNode) return false;
-    if (_sectionHasContentChild(n)) return false;
-    return true;
-  }
+/// ✅ NEW RULES:
+/// - Subsections can ALWAYS be added to a SectionNode (even if it already has intro content)
+/// - Content can be added only if the section has NO content yet (max 1 content per section)
+bool get canAddSubsectionHere {
+  final id = _selectedNodeId;
+  if (id == null) return false;
+  final n = _findNodeById(_doc.roots, id);
+  return n is SectionNode;
+}
 
-  bool get canAddContentHere {
-    final id = _selectedNodeId;
-    if (id == null) return false;
-    final n = _findNodeById(_doc.roots, id);
-    if (n is! SectionNode) return false;
-    if (_sectionHasSectionChildren(n)) return false; // must be leaf
-    if (_sectionHasContentChild(n)) return false; // only one
-    return true;
-  }
+bool get canAddContentHere {
+  final id = _selectedNodeId;
+  if (id == null) return false;
+  final n = _findNodeById(_doc.roots, id);
+  if (n is! SectionNode) return false;
+
+  // ✅ one content per section (intro OR leaf content)
+  
+
+  return true;
+}
 
   // =========================
   // Selection
@@ -474,7 +473,7 @@ class ReportEditorProvider extends ChangeNotifier {
     final selected = _findNodeById(_doc.roots, targetId);
     if (selected is! SectionNode) return;
 
-    if (_sectionHasContentChild(selected)) return; // content is final
+    //if (_sectionHasContentChild(selected)) return; // content is final
 
     final newSec = SectionNode(id: _id('sec'), title: t);
 
@@ -489,29 +488,39 @@ class ReportEditorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addHereContent({String initialText = ''}) {
-    final targetId = _selectedNodeId;
-    if (targetId == null) return;
+void addHereContent({String initialText = ''}) {
+  final targetId = _selectedNodeId;
+  if (targetId == null) return;
 
-    final selected = _findNodeById(_doc.roots, targetId);
-    if (selected is! SectionNode) return;
+  final selected = _findNodeById(_doc.roots, targetId);
+  if (selected is! SectionNode) return;
 
-    if (_sectionHasSectionChildren(selected)) return; // must be leaf
-    if (_sectionHasContentChild(selected)) return; // only one
+  // ✅ only one content per section
+  if (_sectionHasContentChild(selected)) return;
 
-    final newTxt = ContentNode(id: _id('txt'), text: initialText, indent: selected.indent);
+  final newTxt = ContentNode(
+    id: _id('txt'),
+    text: initialText,
+    indent: selected.indent,
+  );
 
-    // leaf section -> set children to exactly [content]
-    _doc = _doc.copyWith(
-      roots: _updateSectionTree(
-        _doc.roots,
-        targetId,
-        (s) => s.copyWith(children: [newTxt], collapsed: false),
-      ),
-      updatedAtIso: nowIso(),
-    );
-    notifyListeners();
-  }
+  _doc = _doc.copyWith(
+    roots: _updateSectionTree(
+      _doc.roots,
+      targetId,
+      (s) {
+        // ✅ Insert content BEFORE subsections (intro content)
+        // If subsections exist, we keep them and put content first.
+        // If no subsections, it becomes leaf content.
+        final nextChildren = <Node>[newTxt, ...s.children.whereType<SectionNode>()];
+        return s.copyWith(children: nextChildren, collapsed: false);
+      },
+    ),
+    updatedAtIso: nowIso(),
+  );
+
+  notifyListeners();
+}
 
   // =========================
   // Tree: Edit
@@ -610,14 +619,14 @@ void deleteContentForSelectedSection() {
   final n = _findNodeById(_doc.roots, id);
   if (n is! SectionNode) return;
 
-  // Only leaf sections should hold content
-  if (_sectionHasSectionChildren(n)) return;
-
   _doc = _doc.copyWith(
     roots: _updateSectionTree(
       _doc.roots,
       id,
-      (s) => s.copyWith(children: const [], collapsed: false),
+      (s) {
+        final kept = s.children.where((c) => c is! ContentNode).toList();
+        return s.copyWith(children: kept, collapsed: false);
+      },
     ),
     updatedAtIso: nowIso(),
   );

@@ -449,6 +449,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     }
 
     final outlineMinHeight = MediaQuery.of(context).size.height * 0.42;
+    final hasSelection = vm.selectedNodeId != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -506,23 +507,32 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
         ],
       ),
 
-      floatingActionButton: _editorMode
-    ? FloatingActionButton(
-        onPressed: () async {
-          if (vm.selectedNodeId == null) {
-            // ➕ Quick add top-level
-            final title = await _promptText(context, 'New top-level section');
-            if (title != null && title.trim().isNotEmpty) {
-              vm.addTopLevelSection(title);
+
+floatingActionButton: _editorMode
+    ? Padding(
+        // ✅ move FAB upward when a section is selected (closer to the outline area)
+        padding: EdgeInsets.only(bottom: hasSelection ? 180 : 0),
+        child: FloatingActionButton(
+          onPressed: () async {
+            if (!hasSelection) {
+              // ➕ Quick add top-level
+              final title = await _promptText(context, 'New top-level section');
+              if (title != null && title.trim().isNotEmpty) {
+                vm.addTopLevelSection(title);
+              }
+            } else {
+              // ⚙ Contextual actions (same-level, wrap, delete...)
+              await _showGlobalAddSheet(context, vm);
             }
-          } else {
-            // ⚙ Contextual actions (same-level, wrap, delete...)
-            await _showGlobalAddSheet(context, vm);
-          }
-        },
-        child: Icon(vm.selectedNodeId == null ? Icons.add : Icons.tune),
+          },
+          child: Icon(hasSelection ? Icons.tune : Icons.add),
+        ),
       )
     : null,
+
+floatingActionButtonLocation:
+    _editorMode ? FloatingActionButtonLocation.endFloat : null,
+
 
       body: GestureDetector(
         onTap: vm.clearSelection,
@@ -831,18 +841,12 @@ Widget _sectionWidget(BuildContext context, ReportEditorProvider vm, SectionNode
     TitleAlign.right => Alignment.centerRight,
   };
 
-  // Should show Delete Content?
-  final sectionHasContent = section.children.any((n) => n is ContentNode);
-  final sectionHasSubsections = section.children.any((n) => n is SectionNode);
+// has any content (intro OR leaf)
+final sectionHasContent = section.children.any((n) => n is ContentNode);
 
-  // "Add here" enabled only if:
-  // - selected
-  // - and provider says can add something
-  final canAddHere = selected && (vm.canAddSubsectionHere || vm.canAddContentHere);
-
-  // If section has content already, "Add here" is useless.
-  // Show Delete Content (only when selected and it is a leaf with content).
-  final showDeleteContent = selected && sectionHasContent && !sectionHasSubsections;
+// only show buttons when selected
+final showAddHere = selected && (vm.canAddSubsectionHere || vm.canAddContentHere);
+final showDeleteContent = selected && sectionHasContent;
 
   return Padding(
     padding: EdgeInsets.only(left: sectionIndent, top: 10),
@@ -886,11 +890,20 @@ Widget _sectionWidget(BuildContext context, ReportEditorProvider vm, SectionNode
                   const SizedBox(width: 8),
 
                   // ✅ small touch/select hint icon on right
-                  Icon(
-                    selected ? Icons.touch_app : Icons.touch_app_outlined,
-                    size: 18,
-                    color: selected ? accent : Colors.black54,
-                  ),
+                  // ✅ right-side affordance
+if (selected)
+  IconButton(
+    icon: const Icon(Icons.more_vert),
+    tooltip: 'Edit section',
+    onPressed: () => _showSectionEditMenu(context, vm, section),
+  )
+else
+  Icon(
+    Icons.touch_app_outlined,
+    size: 18,
+    color: Colors.black54,
+  ),
+
                 ],
               ),
             ),
@@ -901,29 +914,37 @@ Widget _sectionWidget(BuildContext context, ReportEditorProvider vm, SectionNode
 
         // ---------------- ALWAYS-visible action row ----------------
         // ✅ Visible even when disabled: teaches user to tap section first.
-        Padding(
-          padding: const EdgeInsets.only(left: 24),
-          child: Row(
-            children: [
-              Expanded(
-                child: showDeleteContent
-                    ? OutlinedButton.icon(
-                        onPressed: () => vm.deleteContentForSelectedSection(),
-                        icon: const Icon(Icons.delete_outline),
-                        label: const Text('Delete content'),
-                      )
-                    : FilledButton.icon(
-                        // Disabled if not selected or cannot add
-                        onPressed: canAddHere ? () => _showAddHereSheet(context, vm) : null,
-                        icon: const Icon(Icons.add),
-                        label: Text(
-                          selected ? 'Add here' : 'Tap section to enable Add here',
-                        ),
-                      ),
-              ),
-            ],
+       // ---------------- ACTION ROW ----------------
+// Only visible when selected (cleaner UI)
+if (selected)
+  Padding(
+    padding: const EdgeInsets.only(left: 24),
+    child: Row(
+      children: [
+        // ADD HERE
+        if (showAddHere)
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: () => _showAddHereSheet(context, vm),
+              icon: const Icon(Icons.add),
+              label: const Text('Add here'),
+            ),
           ),
-        ),
+
+        // DELETE CONTENT (intro OR leaf)
+        if (showDeleteContent) ...[
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => vm.deleteContentForSelectedSection(),
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Delete content'),
+            ),
+          ),
+        ],
+      ],
+    ),
+  ),
 
         const SizedBox(height: 8),
 

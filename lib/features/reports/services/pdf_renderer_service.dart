@@ -349,48 +349,37 @@ class PdfRendererService {
     );
   }
 
-  pw.Widget _attachmentsGrid(List<pw.MemoryImage> images) {
-    if (images.isEmpty) return pw.SizedBox();
+pw.Widget _attachmentsGrid(List<pw.MemoryImage> images) {
+  if (images.isEmpty) return pw.SizedBox();
 
-    if (images.length == 1) {
-      final img = images.first;
-      return pw.Center(
-        child: pw.Container(
-          height: 360,
-          width: 360,
-          decoration: pw.BoxDecoration(
-            border: pw.Border.all(color: PdfColors.grey300),
-            borderRadius: pw.BorderRadius.circular(16),
-          ),
-          child: pw.ClipRRect(
-            horizontalRadius: 16,
-            verticalRadius: 16,
-            child: pw.Image(img, fit: pw.BoxFit.cover),
-          ),
+  // ✅ Up to 8 per page. If you pass more, caller should chunk.
+  final limited = images.length > 8 ? images.take(8).toList() : images;
+
+  // 2 columns, 4 rows max = 8 images
+  const cols = 2;
+  const gap = 10.0;
+
+  pw.Widget cell(pw.MemoryImage img) => pw.Container(
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(width: 0.6, color: PdfColors.grey400),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        padding: const pw.EdgeInsets.all(4),
+        child: pw.ClipRRect(
+          horizontalRadius: 8,
+          verticalRadius: 8,
+          child: pw.Image(img, fit: pw.BoxFit.cover),
         ),
       );
-    }
 
-    return pw.GridView(
-      crossAxisCount: 2,
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: 1.35,
-      children: images.map((img) {
-        return pw.Container(
-          decoration: pw.BoxDecoration(
-            border: pw.Border.all(color: PdfColors.grey300),
-            borderRadius: pw.BorderRadius.circular(16),
-          ),
-          child: pw.ClipRRect(
-            horizontalRadius: 16,
-            verticalRadius: 16,
-            child: pw.Image(img, fit: pw.BoxFit.cover),
-          ),
-        );
-      }).toList(),
-    );
-  }
+  return pw.GridView(
+    crossAxisCount: cols,
+    mainAxisSpacing: gap,
+    crossAxisSpacing: gap,
+    childAspectRatio: 1.25, // tweak if you want
+    children: limited.map(cell).toList(),
+  );
+}
 
   // ---------------- helpers ----------------
 
