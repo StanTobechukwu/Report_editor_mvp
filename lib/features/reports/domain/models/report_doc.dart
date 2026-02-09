@@ -59,6 +59,11 @@ class ReportDoc {
   /// Subject Info schema + values (snapshot stored per report)
   final SubjectInfoBlockDef subjectInfoDef;
   final SubjectInfoValues subjectInfo;
+ 
+ 
+  final bool applyLetterhead;
+final String? letterheadId;
+
 
   const ReportDoc({
     required this.reportId,
@@ -68,6 +73,9 @@ class ReportDoc {
     this.images = const [],
     this.placementChoice = ImagePlacementChoice.attachmentsOnly,
     this.signature = const SignatureBlock(),
+    this.applyLetterhead = false,
+this.letterheadId,
+
     SubjectInfoBlockDef? subjectInfoDef,
     SubjectInfoValues? subjectInfo,
   })  : subjectInfoDef = subjectInfoDef ?? SubjectInfoBlockDef.kDefaults,
@@ -83,6 +91,9 @@ class ReportDoc {
     List<ImageAttachment>? images,
     ImagePlacementChoice? placementChoice,
     SignatureBlock? signature,
+    bool? applyLetterhead,
+String? letterheadId,
+
     SubjectInfoBlockDef? subjectInfoDef,
     SubjectInfoValues? subjectInfo,
   }) {
@@ -94,6 +105,9 @@ class ReportDoc {
       images: images ?? this.images,
       placementChoice: placementChoice ?? this.placementChoice,
       signature: signature ?? this.signature,
+      applyLetterhead: applyLetterhead ?? this.applyLetterhead,
+letterheadId: letterheadId ?? this.letterheadId,
+
       subjectInfoDef: subjectInfoDef ?? this.subjectInfoDef,
       subjectInfo: subjectInfo ?? this.subjectInfo,
     );

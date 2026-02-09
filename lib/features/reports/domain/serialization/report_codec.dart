@@ -2,6 +2,7 @@ import '../models/nodes.dart';
 import '../models/report_doc.dart';
 import '../models/subject_info_def.dart';
 import '../models/subject_info_value.dart';
+import '../models/subject_info_value.dart';
 
 class ReportCodec {
   // =========================
@@ -12,6 +13,9 @@ class ReportCodec {
         'reportId': doc.reportId,
         'createdAtIso': doc.createdAtIso,
         'updatedAtIso': doc.updatedAtIso,
+        'applyLetterhead': doc.applyLetterhead,
+'letterheadId': doc.letterheadId,
+
 
         // ✅ subject info schema + values
         'subjectInfoDef': doc.subjectInfoDef.toJson(),
@@ -35,8 +39,9 @@ class ReportCodec {
           'credentials': doc.signature.credentials,
           'signatureFilePath': doc.signature.signatureFilePath,
         },
-      };
+       
 
+      };
   static ReportDoc reportFromJson(Map<String, dynamic> j) {
     final createdAtIso = (j['createdAtIso'] as String?) ??
         (j['updatedAtIso'] as String?) ??
@@ -101,6 +106,9 @@ class ReportCodec {
       credentials: (sig['credentials'] as String?) ?? '',
       signatureFilePath: sig['signatureFilePath'] as String?,
     );
+final applyLetterhead = (j['applyLetterhead'] as bool?) ?? false;
+final letterheadId = (j['letterheadId'] as String?)?.trim();
+
 
     return ReportDoc(
       reportId: (j['reportId'] as String?) ?? 'unknown',
@@ -112,6 +120,9 @@ class ReportCodec {
       roots: roots,
       images: images,
       signature: signature,
+      applyLetterhead: applyLetterhead,
+letterheadId: (letterheadId?.isEmpty ?? true) ? null : letterheadId,
+
     );
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'features/reports/data/letterhead_repository.dart';
 
 import 'features/reports/data/reports_repository.dart';
 import 'features/reports/data/templates_repository.dart';
@@ -15,11 +16,15 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final reportsRepo = ReportsRepository();
     final templatesRepo = TemplatesRepository();
+    final letterheadsRepo = LetterheadsRepository();
+
 
     return MultiProvider(
       providers: [
         Provider.value(value: reportsRepo),
         Provider.value(value: templatesRepo),
+        Provider.value(value: letterheadsRepo),
+
         ChangeNotifierProvider(
           create: (_) => ReportEditorProvider(
             repo: reportsRepo,

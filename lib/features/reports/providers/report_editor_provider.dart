@@ -18,6 +18,13 @@ class ReportEditorProvider extends ChangeNotifier {
   final TemplatesRepository templatesRepo;
 
   late ReportDoc _doc;
+  
+  String? _letterheadId;
+bool _applyLetterhead = false;
+
+String? get letterheadId => _letterheadId;
+bool get applyLetterhead => _applyLetterhead;
+
 
   /// Selected node can be a SectionNode OR ContentNode id.
   String? _selectedNodeId;
@@ -696,6 +703,18 @@ void deleteContentForSelectedSection() {
     );
     notifyListeners();
   }
+
+void setLetterhead(String? id) {
+  _letterheadId = id;
+  _applyLetterhead = id != null;
+
+  _doc = doc.copyWith(
+    letterheadId: _letterheadId,
+    applyLetterhead: _applyLetterhead,
+  );
+
+  notifyListeners();
+}
 
   // =========================
   // Tree helpers
