@@ -7,12 +7,13 @@ import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 
 import '../domain/pdf/pdf_plan.dart';
+import '../domain/models/letterhead_template.dart';
 import '../providers/report_editor_provider.dart';
 import '../services/pdf_renderer_service.dart';
-
 import '../data/letterhead_repository.dart';
-//import '../ui/letterhead_selector_sheet.dart';
 import '../ui/letterhead_editor_screen.dart';
+import '../ui/manage_letterhead.screen.dart';
+
 
 class ReportPreviewScreen extends StatefulWidget {
   const ReportPreviewScreen({super.key});
@@ -23,171 +24,171 @@ class ReportPreviewScreen extends StatefulWidget {
 
 class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
   final _renderer = PdfRendererService();
-  //Uint8List? _lastBytes;
   bool _saving = false;
 
+  // ================= BUILD PDF =================
   Future<Uint8List> _buildBytes(ReportEditorProvider vm) async {
     final plan = buildPdfPlan(vm.doc);
-    final bytes = await _renderer.generatePdfBytes(doc: vm.doc, plan: plan);
-   // _lastBytes = bytes;
-    return bytes;
-  }
 
-  Future<File> _savePdfToLocal({
-    required Uint8List bytes,
-    required String fileBaseName,
-  }) async {
-    final dir = await getApplicationDocumentsDirectory();
+    final repo = context.read<LetterheadsRepository>();
 
-    final pdfDir = Directory('${dir.path}/saved_pdfs');
-    if (!await pdfDir.exists()) {
-      await pdfDir.create(recursive: true);
+    LetterheadTemplate? letterhead;
+
+    if (vm.doc.applyLetterhead && vm.doc.letterheadId != null) {
+      letterhead = await repo.loadLetterhead(vm.doc.letterheadId!);
     }
 
-    final safeBase = fileBaseName.replaceAll(RegExp(r'[^\w\-]+'), '_');
+    return _renderer.generatePdfBytes(
+      doc: vm.doc,
+      plan: plan,
+      letterhead: letterhead,
+    );
+  }
 
-    final file = File('${pdfDir.path}/$safeBase.pdf');
+  // ================= SAVE LOCAL =================
+  Future<File> _savePdfToLocal(Uint8List bytes) async {
+    final dir = await getApplicationDocumentsDirectory();
+
+    final folder = Directory('${dir.path}/saved_pdfs');
+    if (!await folder.exists()) {
+      await folder.create(recursive: true);
+    }
+
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final file = File('${folder.path}/report_$ts.pdf');
+
     await file.writeAsBytes(bytes, flush: true);
     return file;
   }
-Future<void> _onSavePressed(
-  BuildContext context,
-  ReportEditorProvider vm,
-) async {
-  if (_saving) return;
 
-  setState(() => _saving = true);
+  Future<void> _onSavePressed(
+    BuildContext context,
+    ReportEditorProvider vm,
+  ) async {
+    if (_saving) return;
 
-  try {
-    // save editable doc
-    await vm.save();
+    setState(() => _saving = true);
 
-    // ALWAYS regenerate PDF (no cache)
-    final bytes = await _buildBytes(vm);
+    try {
+      await vm.save();
 
-    final ts = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final file = await _savePdfToLocal(
-      bytes: bytes,
-      fileBaseName: 'report_$ts',
-    );
+      final bytes = await _buildBytes(vm);
+      final file = await _savePdfToLocal(bytes);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('PDF saved: ${file.path.split('/').last}')),
-    );
-  } finally {
-    if (mounted) setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PDF saved: ${file.path.split('/').last}')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
-}
 
-
+  // ================= UI =================
   @override
   Widget build(BuildContext context) {
     final vm = context.watch<ReportEditorProvider>();
-    final letterheadsRepo = context.read<LetterheadsRepository>();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Preview'),
         actions: [
-        IconButton(
+          // -------- Letterhead selector --------
+          IconButton(
   tooltip: 'Letterhead',
   icon: const Icon(Icons.view_headline_outlined),
   onPressed: () async {
-    try {
-      final repo = context.read<LetterheadsRepository>();
-      final templates = await repo.loadAll();
+    final repo = context.read<LetterheadsRepository>();
+    final templates = await repo.loadAll();
 
-      if (!mounted) return;
+    if (!context.mounted) return;
 
-      const noneToken = '__none__';
+    const noneToken = '__none__';
+    const addToken = '__add__';
+    const manageToken = '__manage__';
 
-      final result = await showModalBottomSheet<String?>(
-        context: context,
-        showDragHandle: true,
-        builder: (sheetContext) {
-          return SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 12),
-                const Text(
-                  'Select Letterhead',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const Divider(),
-
-                // NONE
-                RadioListTile<String?>(
-                  value: noneToken,
-                  groupValue: (vm.doc.letterheadId ?? noneToken),
-                  title: const Text('None'),
-                  onChanged: (v) => Navigator.pop(sheetContext, v),
-                ),
-
-                // EXISTING
-                ...templates.map(
-                  (t) => RadioListTile<String?>(
-                    value: t.letterheadId,
-                    groupValue: (vm.doc.letterheadId ?? noneToken),
-                    title: Text(t.name),
-                    onChanged: (v) => Navigator.pop(sheetContext, v),
-                  ),
-                ),
-
-                const Divider(),
-
-                ListTile(
-                  leading: const Icon(Icons.add),
-                  title: const Text('Add new letterhead'),
-                  onTap: () => Navigator.pop(sheetContext, '__add__'),
-                ),
-
-                ListTile(
-                  leading: const Icon(Icons.edit),
-                  title: const Text('Manage letterheads'),
-                  onTap: () => Navigator.pop(sheetContext, '__manage__'),
-                ),
-
-                const SizedBox(height: 16),
-              ],
+    final result = await showModalBottomSheet<String?>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            const Text(
+              'Select Letterhead',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
-          );
-        },
+            const Divider(),
+
+            RadioListTile<String?>(
+              value: noneToken,
+              groupValue: vm.doc.letterheadId ?? noneToken,
+              title: const Text('None'),
+              onChanged: (v) => Navigator.pop(sheetContext, v), // ✅ sheetContext
+            ),
+
+            ...templates.map(
+              (t) => RadioListTile<String?>(
+                value: t.letterheadId,
+                groupValue: vm.doc.letterheadId ?? noneToken,
+                title: Text(t.name),
+                onChanged: (v) => Navigator.pop(sheetContext, v), // ✅ sheetContext
+              ),
+            ),
+
+            const Divider(),
+
+            ListTile(
+              leading: const Icon(Icons.add),
+              title: const Text('Add new letterhead'),
+              onTap: () => Navigator.pop(sheetContext, addToken), // ✅
+            ),
+
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('Manage letterheads'),
+              onTap: () => Navigator.pop(sheetContext, manageToken), // ✅
+            ),
+
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+
+    if (result == null) return;
+
+    if (result == addToken) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const LetterheadEditorScreen(letterheadId: null),
+        ),
       );
-
-      // User dismissed the bottom sheet (tapped outside / swiped down)
-      if (result == null) return;
-
-      if (result == '__add__' || result == '__manage__') {
-        if (!mounted) return;
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => const LetterheadEditorScreen(letterheadId: null),
-          ),
-        );
-        return;
-      }
-
-      // Apply selection
-      if (result == noneToken) {
-        vm.setLetterhead(null);
-      } else {
-        vm.setLetterhead(result);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Letterhead error: $e')),
-      );
+      // Reload list next time user opens sheet (simple approach)
+      return;
     }
+
+    if (result == manageToken) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const ManageLetterheadsScreen(),
+        ),
+      );
+      return;
+    }
+
+    // Apply selection
+    vm.setLetterhead(result == noneToken ? null : result);
   },
 ),
 
+
+          // -------- Save button --------
           IconButton(
-            tooltip: 'Save PDF',
             icon: _saving
                 ? const SizedBox(
                     width: 18,
@@ -203,8 +204,6 @@ Future<void> _onSavePressed(
         build: (_) => _buildBytes(vm),
         allowPrinting: true,
         allowSharing: true,
-        canChangePageFormat: false,
-        canChangeOrientation: false,
       ),
     );
   }

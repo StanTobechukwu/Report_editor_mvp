@@ -2,7 +2,6 @@ import '../models/nodes.dart';
 import '../models/report_doc.dart';
 import '../models/subject_info_def.dart';
 import '../models/subject_info_value.dart';
-import '../models/subject_info_value.dart';
 
 class ReportCodec {
   // =========================
@@ -13,9 +12,13 @@ class ReportCodec {
         'reportId': doc.reportId,
         'createdAtIso': doc.createdAtIso,
         'updatedAtIso': doc.updatedAtIso,
-        'applyLetterhead': doc.applyLetterhead,
-'letterheadId': doc.letterheadId,
 
+        // ✅ NEW: report title
+        'reportTitle': doc.reportTitle,
+
+        // ✅ letterhead
+        'applyLetterhead': doc.applyLetterhead,
+        'letterheadId': doc.letterheadId,
 
         // ✅ subject info schema + values
         'subjectInfoDef': doc.subjectInfoDef.toJson(),
@@ -25,6 +28,7 @@ class ReportCodec {
         'placementChoice': doc.placementChoice.name,
         'roots': doc.roots.map(sectionToJson).toList(),
 
+        // images
         'images': doc.images
             .map((i) => {
                   'id': i.id,
@@ -39,9 +43,8 @@ class ReportCodec {
           'credentials': doc.signature.credentials,
           'signatureFilePath': doc.signature.signatureFilePath,
         },
-       
-
       };
+
   static ReportDoc reportFromJson(Map<String, dynamic> j) {
     final createdAtIso = (j['createdAtIso'] as String?) ??
         (j['updatedAtIso'] as String?) ??
@@ -51,8 +54,8 @@ class ReportCodec {
         (j['createdAtIso'] as String?) ??
         DateTime.now().toIso8601String();
 
-    final placementName =
-        (j['placementChoice'] as String?) ?? ImagePlacementChoice.attachmentsOnly.name;
+    final placementName = (j['placementChoice'] as String?) ??
+        ImagePlacementChoice.attachmentsOnly.name;
 
     final placementChoice = _safeEnumByName<ImagePlacementChoice>(
       ImagePlacementChoice.values,
@@ -60,16 +63,19 @@ class ReportCodec {
       fallback: ImagePlacementChoice.attachmentsOnly,
     );
 
+    // ✅ NEW: report title (migration-safe)
+    final reportTitle = (j['reportTitle'] as String?) ?? '';
+
     // ✅ subject info def (schema)
     final defJson = j['subjectInfoDef'];
     final subjectInfoDef = defJson is Map
-        ? SubjectInfoBlockDef.fromJson(Map<String, dynamic>.from(defJson as Map))
+        ? SubjectInfoBlockDef.fromJson(Map<String, dynamic>.from(defJson))
         : SubjectInfoBlockDef.defaults();
 
     // ✅ subject info values
     final valuesJson = j['subjectInfo'];
     final subjectInfo = valuesJson is Map
-        ? SubjectInfoValues.fromJson(Map<String, dynamic>.from(valuesJson as Map))
+        ? SubjectInfoValues.fromJson(Map<String, dynamic>.from(valuesJson))
         : const SubjectInfoValues({});
 
     // ✅ roots
@@ -96,33 +102,39 @@ class ReportCodec {
         ? Map<String, dynamic>.from(j['signature'] as Map)
         : <String, dynamic>{};
 
-    // Migration-safe:
-    // older reports may not have roleTitle yet; default to "Reporter"
     final signature = SignatureBlock(
       roleTitle: (sig['roleTitle'] as String?)?.trim().isNotEmpty == true
-          ? sig['roleTitle'] as String
+          ? (sig['roleTitle'] as String)
           : 'Reporter',
       name: (sig['name'] as String?) ?? '',
       credentials: (sig['credentials'] as String?) ?? '',
       signatureFilePath: sig['signatureFilePath'] as String?,
     );
-final applyLetterhead = (j['applyLetterhead'] as bool?) ?? false;
-final letterheadId = (j['letterheadId'] as String?)?.trim();
 
+    // ✅ letterhead (migration-safe)
+    final applyLetterhead = (j['applyLetterhead'] as bool?) ?? false;
+    final letterheadIdRaw = (j['letterheadId'] as String?)?.trim();
+    final letterheadId =
+        (letterheadIdRaw == null || letterheadIdRaw.isEmpty) ? null : letterheadIdRaw;
 
     return ReportDoc(
       reportId: (j['reportId'] as String?) ?? 'unknown',
       createdAtIso: createdAtIso,
       updatedAtIso: updatedAtIso,
+
+      // ✅ NEW
+      reportTitle: reportTitle,
+
       placementChoice: placementChoice,
       subjectInfoDef: subjectInfoDef,
       subjectInfo: subjectInfo,
       roots: roots,
       images: images,
       signature: signature,
-      applyLetterhead: applyLetterhead,
-letterheadId: (letterheadId?.isEmpty ?? true) ? null : letterheadId,
 
+      // ✅ letterhead
+      applyLetterhead: applyLetterhead,
+      letterheadId: letterheadId,
     );
   }
 

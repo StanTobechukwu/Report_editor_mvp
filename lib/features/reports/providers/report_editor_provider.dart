@@ -364,6 +364,16 @@ bool get canAddContentHere {
     await templatesRepo.saveTemplate(t);
   }
 
+
+  //
+void setReportTitle(String v) {
+  _doc = _doc.copyWith(reportTitle: v);
+  notifyListeners();
+}
+
+
+//
+
   // =========================
   // Template -> Report hydration (Form Mode)
   // =========================
@@ -559,6 +569,8 @@ void addHereContent({String initialText = ''}) {
     );
     notifyListeners();
   }
+
+
 
   void updateSectionStyle(String sectionId, TitleStyle style) {
     _doc = _doc.copyWith(

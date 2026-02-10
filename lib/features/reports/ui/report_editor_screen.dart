@@ -29,6 +29,8 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   late final TextEditingController _roleTitleC;
   late final TextEditingController _signerNameC;
   late final TextEditingController _credentialsC;
+  late final TextEditingController _reportTitleC;
+
 
   bool _hintShown = false;
   bool _editorMode = false;
@@ -45,6 +47,8 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     _roleTitleC = TextEditingController();
     _signerNameC = TextEditingController();
     _credentialsC = TextEditingController();
+    _reportTitleC = TextEditingController();
+
   }
 
   @override
@@ -58,7 +62,10 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     _roleTitleC.dispose();
     _signerNameC.dispose();
     _credentialsC.dispose();
+     _reportTitleC.dispose();
     super.dispose();
+   
+
   }
 
   Color _accent(BuildContext context) => Theme.of(context).colorScheme.primary;
@@ -79,6 +86,12 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       if (c.text != current) c.text = current;
     }
   }
+
+  void _syncReportTitleController(ReportEditorProvider vm) {
+  final t = vm.doc.reportTitle;
+  if (_reportTitleC.text != t) _reportTitleC.text = t;
+}
+
 
   TextEditingController _contentControllerFor(String key, String initial) {
     return _contentControllers.putIfAbsent(
@@ -432,6 +445,8 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     _syncSubjectControllers(vm);
     _syncContentControllers(vm);
     _syncSignerControllers(vm);
+    _syncReportTitleController(vm);
+
 
     if (_editorMode &&
         !_hintShown &&
@@ -689,6 +704,16 @@ floatingActionButtonLocation:
     );
   }
 
+
+
+
+
+
+
+
+
+  
+
   // ---------------- Subject Info UI (BUTTONS RESTORED) ----------------
 
   Widget _subjectInfoCard(ReportEditorProvider vm) {
@@ -763,6 +788,20 @@ floatingActionButtonLocation:
             runSpacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
+              SizedBox(
+  width: 280, // keeps Wrap layout clean
+  child: TextField(
+    controller: _reportTitleC,
+    decoration: const InputDecoration(
+      labelText: 'Report Title / Topic',
+      hintText: 'e.g., Upper GI Endoscopy Report',
+      border: OutlineInputBorder(),
+      isDense: true,
+    ),
+    onChanged: vm.setReportTitle,
+  ),
+),
+
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -781,6 +820,19 @@ floatingActionButtonLocation:
                   ),
                 ],
               ),
+
+              TextFormField(
+  initialValue: vm.doc.reportTitle,
+  decoration: const InputDecoration(
+    labelText: 'Report Title / Topic',
+    hintText: 'e.g., Upper GI Endoscopy Report',
+    border: OutlineInputBorder(),
+    isDense: true,
+  ),
+  onChanged: vm.setReportTitle,
+),
+const SizedBox(height: 12),
+
 
               // ✅ RESTORED
               OutlinedButton.icon(

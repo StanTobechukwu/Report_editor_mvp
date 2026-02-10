@@ -50,7 +50,7 @@ class ReportDoc {
   final String reportId;
   final String createdAtIso;
   final String updatedAtIso;
-
+final String reportTitle; 
   final List<SectionNode> roots;
   final List<ImageAttachment> images;
   final ImagePlacementChoice placementChoice;
@@ -69,6 +69,7 @@ final String? letterheadId;
     required this.reportId,
     required this.createdAtIso,
     required this.updatedAtIso,
+     this.reportTitle = '',
     this.roots = const [],
     this.images = const [],
     this.placementChoice = ImagePlacementChoice.attachmentsOnly,
@@ -87,6 +88,7 @@ this.letterheadId,
   ReportDoc copyWith({
     String? createdAtIso,
     String? updatedAtIso,
+    String? reportTitle,
     List<SectionNode>? roots,
     List<ImageAttachment>? images,
     ImagePlacementChoice? placementChoice,
@@ -101,6 +103,8 @@ String? letterheadId,
       reportId: reportId,
       createdAtIso: createdAtIso ?? this.createdAtIso,
       updatedAtIso: updatedAtIso ?? this.updatedAtIso,
+      reportTitle: reportTitle ?? this.reportTitle,
+
       roots: roots ?? this.roots,
       images: images ?? this.images,
       placementChoice: placementChoice ?? this.placementChoice,
