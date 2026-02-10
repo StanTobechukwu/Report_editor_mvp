@@ -25,14 +25,18 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
   final _renderer = PdfRendererService();
   bool _saving = false;
 
-  // ================= BUILD PDF =================
-  Future<Uint8List> _buildBytes(ReportEditorProvider vm) async {
-    final plan = buildPdfPlan(vm.doc);
+  // ---------------------------------------------------------------------------
+  // 🔑 CRITICAL RULE:
+  // PdfPreview must NEVER depend on provider rebuilds.
+  // Always read provider INSIDE async methods, never via watch().
+  // ---------------------------------------------------------------------------
+  Future<Uint8List> _buildBytes() async {
+    final vm = context.read<ReportEditorProvider>();
 
+    final plan = buildPdfPlan(vm.doc);
     final repo = context.read<LetterheadsRepository>();
 
     LetterheadTemplate? letterhead;
-
     if (vm.doc.applyLetterhead && vm.doc.letterheadId != null) {
       letterhead = await repo.loadLetterhead(vm.doc.letterheadId!);
     }
@@ -44,38 +48,34 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     );
   }
 
-  // ================= SAVE LOCAL =================
   Future<File> _savePdfToLocal(Uint8List bytes) async {
     final dir = await getApplicationDocumentsDirectory();
-
     final folder = Directory('${dir.path}/saved_pdfs');
+
     if (!await folder.exists()) {
       await folder.create(recursive: true);
     }
 
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final file = File('${folder.path}/report_$ts.pdf');
+    final file = File(
+      '${folder.path}/report_${DateTime.now().millisecondsSinceEpoch}.pdf',
+    );
 
     await file.writeAsBytes(bytes, flush: true);
     return file;
   }
 
-  Future<void> _onSavePressed(
-    BuildContext context,
-    ReportEditorProvider vm,
-  ) async {
+  Future<void> _onSavePressed() async {
     if (_saving) return;
 
+    final vm = context.read<ReportEditorProvider>();
     setState(() => _saving = true);
 
     try {
       await vm.save();
-
-      final bytes = await _buildBytes(vm);
+      final bytes = await _buildBytes();
       final file = await _savePdfToLocal(bytes);
 
       if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('PDF saved: ${file.path.split('/').last}')),
       );
@@ -84,8 +84,11 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     }
   }
 
-  // ================= Letterhead Sheet =================
-  Future<void> _openLetterheadSheet(BuildContext context, ReportEditorProvider vm) async {
+  // ---------------------------------------------------------------------------
+  // Letterhead selector (FULL, SAFE)
+  // ---------------------------------------------------------------------------
+  Future<void> _openLetterheadSheet() async {
+    final vm = context.read<ReportEditorProvider>();
     final repo = context.read<LetterheadsRepository>();
     final templates = await repo.loadAll();
 
@@ -101,6 +104,7 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
       builder: (sheetContext) => SafeArea(
         child: ListView(
           shrinkWrap: true,
+          padding: const EdgeInsets.only(bottom: 12),
           children: [
             const SizedBox(height: 12),
             const Center(
@@ -134,7 +138,6 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
               title: const Text('Add new letterhead'),
               onTap: () => Navigator.pop(sheetContext, addToken),
             ),
-
             ListTile(
               leading: const Icon(Icons.settings_outlined),
               title: const Text('Manage letterheads'),
@@ -167,17 +170,18 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
       return;
     }
 
-    // ✅ CRITICAL: delay provider update until sheet fully closed
+    // 🔑 CRITICAL: update provider AFTER sheet closes
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      vm.setLetterhead(result);
+      if (!mounted) return;
+      vm.setLetterhead(result); // null = None
     });
   }
 
-  // ================= UI =================
+  // ---------------------------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
-    final vm = context.watch<ReportEditorProvider>();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Preview'),
@@ -185,7 +189,7 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
           IconButton(
             tooltip: 'Letterhead',
             icon: const Icon(Icons.view_headline_outlined),
-            onPressed: () => _openLetterheadSheet(context, vm),
+            onPressed: _openLetterheadSheet,
           ),
           IconButton(
             icon: _saving
@@ -195,23 +199,21 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.save_outlined),
-            onPressed: _saving ? null : () => _onSavePressed(context, vm),
+            onPressed: _saving ? null : _onSavePressed,
           ),
         ],
       ),
 
-      // ✅ FIXED: bounded constraints
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          return ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: constraints.maxHeight),
-            child: PdfPreview(
-              build: (_) => _buildBytes(vm),
-              allowPrinting: true,
-              allowSharing: true,
-            ),
-          );
-        },
+      // ---------------------------------------------------------------------
+      // 🔑 CRITICAL FIX FOR INLINE IMAGE CRASH
+      // PdfPreview MUST be given tight constraints
+      // ---------------------------------------------------------------------
+      body: SizedBox.expand(
+        child: PdfPreview(
+          build: (_) => _buildBytes(),
+          allowPrinting: true,
+          allowSharing: true,
+        ),
       ),
     );
   }

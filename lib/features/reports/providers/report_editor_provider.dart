@@ -18,13 +18,6 @@ class ReportEditorProvider extends ChangeNotifier {
   final TemplatesRepository templatesRepo;
 
   late ReportDoc _doc;
-  
- // String? _letterheadId;
-//bool _applyLetterhead = false;
-
-//String? get letterheadId => _letterheadId;
-//bool get applyLetterhead => _applyLetterhead;
-
 
   /// Selected node can be a SectionNode OR ContentNode id.
   String? _selectedNodeId;
@@ -58,27 +51,26 @@ class ReportEditorProvider extends ChangeNotifier {
     return _findNodeById(_doc.roots, id) is ContentNode;
   }
 
-/// ✅ NEW RULES:
-/// - Subsections can ALWAYS be added to a SectionNode (even if it already has intro content)
-/// - Content can be added only if the section has NO content yet (max 1 content per section)
-bool get canAddSubsectionHere {
-  final id = _selectedNodeId;
-  if (id == null) return false;
-  final n = _findNodeById(_doc.roots, id);
-  return n is SectionNode;
-}
+  /// ✅ RULES:
+  /// - Subsections can ALWAYS be added to a SectionNode (even if it already has intro content)
+  /// - Content can be added only if the section has NO content yet (max 1 content per section)
+  bool get canAddSubsectionHere {
+    final id = _selectedNodeId;
+    if (id == null) return false;
+    final n = _findNodeById(_doc.roots, id);
+    return n is SectionNode;
+  }
 
-bool get canAddContentHere {
-  final id = _selectedNodeId;
-  if (id == null) return false;
-  final n = _findNodeById(_doc.roots, id);
-  if (n is! SectionNode) return false;
+  bool get canAddContentHere {
+    final id = _selectedNodeId;
+    if (id == null) return false;
 
-  // ✅ one content per section (intro OR leaf content)
-  
+    final n = _findNodeById(_doc.roots, id);
+    if (n is! SectionNode) return false;
 
-  return true;
-}
+    // ✅ only one content per section (intro OR leaf content)
+    return !_sectionHasContentChild(n);
+  }
 
   // =========================
   // Selection
@@ -120,10 +112,12 @@ bool get canAddContentHere {
     final now = nowIso();
 
     // 1) Deep-clone template structure
-    final cloned = template.roots.map((s) => s.cloneNodeTree()).toList(growable: false);
+    final cloned =
+        template.roots.map((s) => s.cloneNodeTree()).toList(growable: false);
 
     // 2) Hydrate leaf sections with exactly one content node (Form Mode)
-    final hydrated = cloned.map(_hydrateTemplateSectionForForm).toList(growable: false);
+    final hydrated =
+        cloned.map(_hydrateTemplateSectionForForm).toList(growable: false);
 
     _doc = ReportDoc(
       reportId: newId('rpt'),
@@ -164,7 +158,7 @@ bool get canAddContentHere {
 
   /// Ensures a leaf section has exactly ONE ContentNode.
   /// Safe to call repeatedly (no duplicates created).
-/*   void ensureLeafHasContent(String sectionId) {
+  void ensureLeafHasContent(String sectionId) {
     final s = _findSectionById(_doc.roots, sectionId);
     if (s == null) return;
 
@@ -200,7 +194,7 @@ bool get canAddContentHere {
       updatedAtIso: nowIso(),
     );
     notifyListeners();
-  } */
+  }
 
   // =========================
   // Subject Info (schema + values)
@@ -330,18 +324,20 @@ bool get canAddContentHere {
 
   int _nextOrder(List<SubjectFieldDef> fields) {
     if (fields.isEmpty) return 0;
-    final maxOrder = fields.map((f) => f.order).reduce((a, b) => a > b ? a : b);
+    final maxOrder =
+        fields.map((f) => f.order).reduce((a, b) => a > b ? a : b);
     return maxOrder + 1;
   }
 
   String _generateCustomFieldKey() {
     final r = Random();
-    final chunk = List.generate(8, (_) => r.nextInt(36).toRadixString(36)).join();
+    final chunk =
+        List.generate(8, (_) => r.nextInt(36).toRadixString(36)).join();
     return 'custom_$chunk';
   }
 
   // =========================
-  // Template save (ok as-is)
+  // Template save
   // =========================
 
   Future<void> saveAsTemplate({
@@ -364,15 +360,14 @@ bool get canAddContentHere {
     await templatesRepo.saveTemplate(t);
   }
 
+  // =========================
+  // Report Title
+  // =========================
 
-  //
-void setReportTitle(String v) {
-  _doc = _doc.copyWith(reportTitle: v);
-  notifyListeners();
-}
-
-
-//
+  void setReportTitle(String v) {
+    _doc = _doc.copyWith(reportTitle: v);
+    notifyListeners();
+  }
 
   // =========================
   // Template -> Report hydration (Form Mode)
@@ -392,7 +387,8 @@ void setReportTitle(String v) {
         ? s.children.whereType<ContentNode>().first
         : null;
 
-    final content = firstContent ?? ContentNode(id: _id('txt'), text: '', indent: s.indent);
+    final content =
+        firstContent ?? ContentNode(id: _id('txt'), text: '', indent: s.indent);
     return s.copyWith(children: [content], collapsed: false);
   }
 
@@ -477,11 +473,6 @@ void setReportTitle(String v) {
   // Tree: Add Here (context)
   // =========================
 
-  /// ✅ NEW RULES ENFORCED:
-  /// - You can’t add a subsection if the section already has content.
-  /// - You can’t add content if the section has subsections.
-  /// - Only one content per section.
-  /// - Selection being a ContentNode does NOT allow adding more content/subsections.
   void addHereSubsection(String title) {
     final t = title.trim();
     final targetId = _selectedNodeId;
@@ -489,8 +480,6 @@ void setReportTitle(String v) {
 
     final selected = _findNodeById(_doc.roots, targetId);
     if (selected is! SectionNode) return;
-
-    //if (_sectionHasContentChild(selected)) return; // content is final
 
     final newSec = SectionNode(id: _id('sec'), title: t);
 
@@ -505,39 +494,37 @@ void setReportTitle(String v) {
     notifyListeners();
   }
 
-void addHereContent({String initialText = ''}) {
-  final targetId = _selectedNodeId;
-  if (targetId == null) return;
+  void addHereContent({String initialText = ''}) {
+    final targetId = _selectedNodeId;
+    if (targetId == null) return;
 
-  final selected = _findNodeById(_doc.roots, targetId);
-  if (selected is! SectionNode) return;
+    final selected = _findNodeById(_doc.roots, targetId);
+    if (selected is! SectionNode) return;
 
-  // ✅ only one content per section
-  if (_sectionHasContentChild(selected)) return;
+    // ✅ only one content per section
+    if (_sectionHasContentChild(selected)) return;
 
-  final newTxt = ContentNode(
-    id: _id('txt'),
-    text: initialText,
-    indent: selected.indent,
-  );
+    final newTxt = ContentNode(
+      id: _id('txt'),
+      text: initialText,
+      indent: selected.indent,
+    );
 
-  _doc = _doc.copyWith(
-    roots: _updateSectionTree(
-      _doc.roots,
-      targetId,
-      (s) {
-        // ✅ Insert content BEFORE subsections (intro content)
-        // If subsections exist, we keep them and put content first.
-        // If no subsections, it becomes leaf content.
-        final nextChildren = <Node>[newTxt, ...s.children.whereType<SectionNode>()];
-        return s.copyWith(children: nextChildren, collapsed: false);
-      },
-    ),
-    updatedAtIso: nowIso(),
-  );
+    _doc = _doc.copyWith(
+      roots: _updateSectionTree(
+        _doc.roots,
+        targetId,
+        (s) {
+          // ✅ Insert content BEFORE subsections (intro content)
+          final nextChildren = <Node>[newTxt, ...s.children.whereType<SectionNode>()];
+          return s.copyWith(children: nextChildren, collapsed: false);
+        },
+      ),
+      updatedAtIso: nowIso(),
+    );
 
-  notifyListeners();
-}
+    notifyListeners();
+  }
 
   // =========================
   // Tree: Edit
@@ -570,8 +557,6 @@ void addHereContent({String initialText = ''}) {
     notifyListeners();
   }
 
-
-
   void updateSectionStyle(String sectionId, TitleStyle style) {
     _doc = _doc.copyWith(
       roots: _updateSectionTree(
@@ -591,71 +576,66 @@ void addHereContent({String initialText = ''}) {
     );
     notifyListeners();
   }
-// =========================
-// Delete single content node (NEW)
-// =========================
-
-/// Removes a ContentNode from its parent section.
-/// Used when user taps "Delete content" in outline.
-/// Safe: only deletes that content, keeps section.
-void deleteContentNode(String contentId) {
-  List<Node> walk(List<Node> children) {
-    return children.where((n) {
-      // remove only the targeted content
-      return !(n is ContentNode && n.id == contentId);
-    }).map((n) {
-      if (n is SectionNode) {
-        return n.copyWith(children: walk(n.children));
-      }
-      return n;
-    }).toList();
-  }
-
-  _doc = _doc.copyWith(
-    roots: _doc.roots.map((s) => s.copyWith(children: walk(s.children))).toList(),
-    updatedAtIso: nowIso(),
-  );
-
-  // reset selection to avoid stale id
-  _selectedNodeId = null;
-
-  notifyListeners();
-}
-bool get selectedSectionHasContent {
-  final id = _selectedNodeId;
-  if (id == null) return false;
-
-  final n = _findNodeById(_doc.roots, id);
-  if (n is! SectionNode) return false;
-
-  return n.children.any((c) => c is ContentNode);
-}
-
-void deleteContentForSelectedSection() {
-  final id = _selectedNodeId;
-  if (id == null) return;
-
-  final n = _findNodeById(_doc.roots, id);
-  if (n is! SectionNode) return;
-
-  _doc = _doc.copyWith(
-    roots: _updateSectionTree(
-      _doc.roots,
-      id,
-      (s) {
-        final kept = s.children.where((c) => c is! ContentNode).toList();
-        return s.copyWith(children: kept, collapsed: false);
-      },
-    ),
-    updatedAtIso: nowIso(),
-  );
-
-  notifyListeners();
-}
-
 
   // =========================
-  // Images / Signature (unchanged)
+  // Delete content (outline)
+  // =========================
+
+  void deleteContentNode(String contentId) {
+    List<Node> walk(List<Node> children) {
+      return children
+          .where((n) => !(n is ContentNode && n.id == contentId))
+          .map((n) {
+        if (n is SectionNode) {
+          return n.copyWith(children: walk(n.children));
+        }
+        return n;
+      }).toList();
+    }
+
+    _doc = _doc.copyWith(
+      roots: _doc.roots.map((s) => s.copyWith(children: walk(s.children))).toList(),
+      updatedAtIso: nowIso(),
+    );
+
+    _selectedNodeId = null;
+    notifyListeners();
+  }
+
+  bool get selectedSectionHasContent {
+    final id = _selectedNodeId;
+    if (id == null) return false;
+
+    final n = _findNodeById(_doc.roots, id);
+    if (n is! SectionNode) return false;
+
+    return n.children.any((c) => c is ContentNode);
+  }
+
+  void deleteContentForSelectedSection() {
+    final id = _selectedNodeId;
+    if (id == null) return;
+
+    final n = _findNodeById(_doc.roots, id);
+    if (n is! SectionNode) return;
+
+    _doc = _doc.copyWith(
+      roots: _updateSectionTree(
+        _doc.roots,
+        id,
+        (s) {
+          final kept = s.children.where((c) => c is! ContentNode).toList();
+          return s.copyWith(children: kept, collapsed: false);
+        },
+      ),
+      updatedAtIso: nowIso(),
+    );
+
+    notifyListeners();
+  }
+
+  // =========================
+  // Images / Signature
   // =========================
 
   void setPlacementChoice(ImagePlacementChoice choice) {
@@ -679,7 +659,8 @@ void deleteContentForSelectedSection() {
       throw Exception('Maximum of $cap images allowed for this mode.');
     }
 
-    final newImgs = clean.map((p) => ImageAttachment(id: _id('img'), filePath: p)).toList();
+    final newImgs =
+        clean.map((p) => ImageAttachment(id: _id('img'), filePath: p)).toList();
 
     _doc = _doc.copyWith(
       images: [..._doc.images, ...newImgs],
@@ -716,27 +697,72 @@ void deleteContentForSelectedSection() {
     notifyListeners();
   }
 
-/* void setLetterhead(String? id) {
-  _letterheadId = id;
-  _applyLetterhead = id != null;
-
-  _doc = doc.copyWith(
-    letterheadId: _letterheadId,
-    applyLetterhead: _applyLetterhead,
-  );
-
-  notifyListeners();
-} */
+  void setLetterhead(String? id) {
+    _doc = _doc.copyWith(
+      letterheadId: id,
+      applyLetterhead: id != null,
+      updatedAtIso: nowIso(),
+    );
+    notifyListeners();
+  }
 
 
-void setLetterhead(String? id) {
+
+
+
+void ensureFormReady() {
+  bool changed = false;
+
+  SectionNode fix(SectionNode s) {
+    final hasSectionChildren = s.children.any((n) => n is SectionNode);
+    final contentNodes = s.children.whereType<ContentNode>().toList();
+
+    // container section: allow optional intro content (0 or 1), plus subsections
+    if (hasSectionChildren) {
+      // keep at most ONE content node (intro)
+      final intro = contentNodes.isNotEmpty ? contentNodes.first : null;
+      final subsections = s.children.whereType<SectionNode>().toList();
+
+      final nextChildren = <Node>[
+        if (intro != null) intro,
+        ...subsections.map(fix),
+      ];
+
+      if (nextChildren.length != s.children.length) changed = true;
+      return s.copyWith(children: nextChildren);
+    }
+
+    // leaf section: MUST have exactly ONE content
+    if (contentNodes.isEmpty) {
+      changed = true;
+      final newTxt = ContentNode(id: _id('txt'), text: '', indent: s.indent);
+      return s.copyWith(children: [newTxt], collapsed: false);
+    }
+
+    if (contentNodes.length > 1 || s.children.length != 1) {
+      changed = true;
+      return s.copyWith(children: [contentNodes.first], collapsed: false);
+    }
+
+    return s;
+  }
+
+  final nextRoots = _doc.roots.map(fix).toList(growable: false);
+
+  if (!changed) return;
+
   _doc = _doc.copyWith(
-    letterheadId: id,
-    applyLetterhead: id != null,
+    roots: nextRoots,
     updatedAtIso: nowIso(),
   );
   notifyListeners();
 }
+
+
+
+
+
+
 
 
   // =========================
@@ -843,7 +869,10 @@ void setLetterhead(String? id) {
       }
     }
 
-    return roots.map((s) => s.copyWith(children: _insertSiblingInChildren(s.children, targetId, newNode))).toList();
+    return roots
+        .map((s) =>
+            s.copyWith(children: _insertSiblingInChildren(s.children, targetId, newNode)))
+        .toList();
   }
 
   List<Node> _insertSiblingInChildren(List<Node> children, String targetId, Node newNode) {
@@ -875,7 +904,9 @@ void setLetterhead(String? id) {
       }
     }
 
-    return roots.map((s) => s.copyWith(children: _replaceNodeInChildren(s.children, targetId, replacement))).toList();
+    return roots
+        .map((s) => s.copyWith(children: _replaceNodeInChildren(s.children, targetId, replacement)))
+        .toList();
   }
 
   List<Node> _replaceNodeInChildren(List<Node> children, String targetId, SectionNode replacement) {
@@ -905,7 +936,9 @@ void setLetterhead(String? id) {
       return next;
     }
 
-    return roots.map((s) => s.copyWith(children: _deleteNodeInChildren(s.children, targetId))).toList();
+    return roots
+        .map((s) => s.copyWith(children: _deleteNodeInChildren(s.children, targetId)))
+        .toList();
   }
 
   List<Node> _deleteNodeInChildren(List<Node> children, String targetId) {
