@@ -14,7 +14,6 @@ import '../data/letterhead_repository.dart';
 import '../ui/letterhead_editor_screen.dart';
 import '../ui/manage_letterhead.screen.dart';
 
-
 class ReportPreviewScreen extends StatefulWidget {
   const ReportPreviewScreen({super.key});
 
@@ -85,6 +84,95 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     }
   }
 
+  // ================= Letterhead Sheet =================
+  Future<void> _openLetterheadSheet(BuildContext context, ReportEditorProvider vm) async {
+    final repo = context.read<LetterheadsRepository>();
+    final templates = await repo.loadAll();
+
+    if (!mounted) return;
+
+    const addToken = '__add__';
+    const manageToken = '__manage__';
+
+    final result = await showModalBottomSheet<String?>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            const SizedBox(height: 12),
+            const Center(
+              child: Text(
+                'Select Letterhead',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            const Divider(),
+
+            RadioListTile<String?>(
+              value: null,
+              groupValue: vm.doc.letterheadId,
+              title: const Text('None'),
+              onChanged: (v) => Navigator.pop(sheetContext, v),
+            ),
+
+            ...templates.map(
+              (t) => RadioListTile<String?>(
+                value: t.letterheadId,
+                groupValue: vm.doc.letterheadId,
+                title: Text(t.name),
+                onChanged: (v) => Navigator.pop(sheetContext, v),
+              ),
+            ),
+
+            const Divider(),
+
+            ListTile(
+              leading: const Icon(Icons.add),
+              title: const Text('Add new letterhead'),
+              onTap: () => Navigator.pop(sheetContext, addToken),
+            ),
+
+            ListTile(
+              leading: const Icon(Icons.settings_outlined),
+              title: const Text('Manage letterheads'),
+              onTap: () => Navigator.pop(sheetContext, manageToken),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (result == addToken) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const LetterheadEditorScreen(letterheadId: null),
+        ),
+      );
+      return;
+    }
+
+    if (result == manageToken) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const ManageLetterheadsScreen(),
+        ),
+      );
+      return;
+    }
+
+    // ✅ CRITICAL: delay provider update until sheet fully closed
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      vm.setLetterhead(result);
+    });
+  }
+
   // ================= UI =================
   @override
   Widget build(BuildContext context) {
@@ -94,107 +182,11 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
       appBar: AppBar(
         title: const Text('Preview'),
         actions: [
-          // -------- Letterhead selector --------
           IconButton(
-  tooltip: 'Letterhead',
-  icon: const Icon(Icons.view_headline_outlined),
-  onPressed: () async {
-    final repo = context.read<LetterheadsRepository>();
-    final templates = await repo.loadAll();
-
-    if (!context.mounted) return;
-
-    //const noneToken = '__none__';
-    const addToken = '__add__';
-    const manageToken = '__manage__';
-
-    final result = await showModalBottomSheet<String?>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            const Text(
-              'Select Letterhead',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const Divider(),
-
-           RadioGroup<String?>(
-  groupValue: vm.doc.letterheadId,
-  onChanged: (v) => Navigator.pop(sheetContext, v),
-  child: Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      const RadioListTile<String?>(
-        value: null,
-        title: Text('None'),
-      ),
-      ...templates.map(
-        (t) => RadioListTile<String?>(
-          value: t.letterheadId,
-          title: Text(t.name),
-        ),
-      ),
-    ],
-  ),
-),
-
-            const Divider(),
-
-            ListTile(
-              leading: const Icon(Icons.add),
-              title: const Text('Add new letterhead'),
-              onTap: () => Navigator.pop(sheetContext, addToken), // ✅
-            ),
-
-            ListTile(
-              leading: const Icon(Icons.settings_outlined),
-              title: const Text('Manage letterheads'),
-              onTap: () => Navigator.pop(sheetContext, manageToken), // ✅
-            ),
-
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
-
-    //if (result == null) return;
-
-    
-
-   if (result == addToken) {
-  await Navigator.push(
-    context,
-    MaterialPageRoute(
-      builder: (_) => const LetterheadEditorScreen(letterheadId: null),
-    ),
-  );
-  return;
-}
-
-if (result == manageToken) {
-  await Navigator.push(
-    context,
-    MaterialPageRoute(
-      builder: (_) => const ManageLetterheadsScreen(),
-    ),
-  );
-  return;
-}
-
-// ✅ ALWAYS APPLY (including null = None)
-vm.setLetterhead(result);
-
-    }
-  
-),
-
-
-          // -------- Save button --------
+            tooltip: 'Letterhead',
+            icon: const Icon(Icons.view_headline_outlined),
+            onPressed: () => _openLetterheadSheet(context, vm),
+          ),
           IconButton(
             icon: _saving
                 ? const SizedBox(
@@ -207,14 +199,20 @@ vm.setLetterhead(result);
           ),
         ],
       ),
-     body: SizedBox.expand(
-  child: PdfPreview(
-    build: (_) => _buildBytes(vm),
-    allowPrinting: true,
-    allowSharing: true,
-  ),
-),
 
+      // ✅ FIXED: bounded constraints
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: constraints.maxHeight),
+            child: PdfPreview(
+              build: (_) => _buildBytes(vm),
+              allowPrinting: true,
+              allowSharing: true,
+            ),
+          );
+        },
+      ),
     );
   }
 }
