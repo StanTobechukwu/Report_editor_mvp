@@ -164,7 +164,7 @@ bool get canAddContentHere {
 
   /// Ensures a leaf section has exactly ONE ContentNode.
   /// Safe to call repeatedly (no duplicates created).
-  void ensureLeafHasContent(String sectionId) {
+/*   void ensureLeafHasContent(String sectionId) {
     final s = _findSectionById(_doc.roots, sectionId);
     if (s == null) return;
 
@@ -200,7 +200,7 @@ bool get canAddContentHere {
       updatedAtIso: nowIso(),
     );
     notifyListeners();
-  }
+  } */
 
   // =========================
   // Subject Info (schema + values)

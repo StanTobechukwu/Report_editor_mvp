@@ -554,6 +554,9 @@ floatingActionButtonLocation:
         child: ListView(
           padding: const EdgeInsets.all(_pagePad),
           children: [
+            _reportTitleCard(vm),
+            const SizedBox(height: _bigGap),
+
             _subjectInfoCard(vm),
             const SizedBox(height: _bigGap),
 
@@ -651,10 +654,6 @@ floatingActionButtonLocation:
     }
 
     if (contentChildren.isEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        vm.ensureLeafHasContent(s.id);
-      });
 
       return Padding(
         padding: const EdgeInsets.only(bottom: _bigGap),
@@ -706,6 +705,22 @@ floatingActionButtonLocation:
 
 
 
+// ---------------- Report Title UI ----------------
+Widget _reportTitleCard(ReportEditorProvider vm) {
+  return _card(
+    title: 'Report',
+    child: TextField(
+      controller: _reportTitleC,
+      decoration: const InputDecoration(
+        labelText: 'Report Title / Topic',
+        hintText: 'e.g., Upper GI Endoscopy Report',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      onChanged: vm.setReportTitle,
+    ),
+  );
+}
 
 
 
@@ -777,6 +792,8 @@ floatingActionButtonLocation:
       body = Column(children: fieldWidgets);
     }
 
+    
+
     return _card(
       title: 'Subject Info',
       child: Column(
@@ -788,19 +805,7 @@ floatingActionButtonLocation:
             runSpacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              SizedBox(
-  width: 280, // keeps Wrap layout clean
-  child: TextField(
-    controller: _reportTitleC,
-    decoration: const InputDecoration(
-      labelText: 'Report Title / Topic',
-      hintText: 'e.g., Upper GI Endoscopy Report',
-      border: OutlineInputBorder(),
-      isDense: true,
-    ),
-    onChanged: vm.setReportTitle,
-  ),
-),
+              
 
               Row(
                 mainAxisSize: MainAxisSize.min,
@@ -821,16 +826,6 @@ floatingActionButtonLocation:
                 ],
               ),
 
-              TextFormField(
-  initialValue: vm.doc.reportTitle,
-  decoration: const InputDecoration(
-    labelText: 'Report Title / Topic',
-    hintText: 'e.g., Upper GI Endoscopy Report',
-    border: OutlineInputBorder(),
-    isDense: true,
-  ),
-  onChanged: vm.setReportTitle,
-),
 const SizedBox(height: 12),
 
 
@@ -1420,6 +1415,11 @@ class _SectionEditSheetState extends State<_SectionEditSheet> {
     );
   }
 }
+
+
+
+
+
 
 // ---------------- Images Manager (UNCHANGED) ----------------
 

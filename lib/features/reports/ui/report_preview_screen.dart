@@ -123,8 +123,8 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
             const Divider(),
 
             RadioListTile<String?>(
-              value: noneToken,
-              groupValue: vm.doc.letterheadId ?? noneToken,
+              value: null,
+              groupValue: vm.doc.letterheadId,
               title: const Text('None'),
               onChanged: (v) => Navigator.pop(sheetContext, v), // ✅ sheetContext
             ),
@@ -182,8 +182,10 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     }
 
     // Apply selection
-    vm.setLetterhead(result == noneToken ? null : result);
-  },
+
+   
+    vm.setLetterhead(result);}
+  
 ),
 
 
