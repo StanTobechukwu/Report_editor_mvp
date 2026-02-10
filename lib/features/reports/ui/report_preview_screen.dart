@@ -104,7 +104,7 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
 
     if (!context.mounted) return;
 
-    const noneToken = '__none__';
+    //const noneToken = '__none__';
     const addToken = '__add__';
     const manageToken = '__manage__';
 
@@ -122,21 +122,25 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
             ),
             const Divider(),
 
-            RadioListTile<String?>(
-              value: null,
-              groupValue: vm.doc.letterheadId,
-              title: const Text('None'),
-              onChanged: (v) => Navigator.pop(sheetContext, v), // ✅ sheetContext
-            ),
-
-            ...templates.map(
-              (t) => RadioListTile<String?>(
-                value: t.letterheadId,
-                groupValue: vm.doc.letterheadId ?? noneToken,
-                title: Text(t.name),
-                onChanged: (v) => Navigator.pop(sheetContext, v), // ✅ sheetContext
-              ),
-            ),
+           RadioGroup<String?>(
+  groupValue: vm.doc.letterheadId,
+  onChanged: (v) => Navigator.pop(sheetContext, v),
+  child: Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      const RadioListTile<String?>(
+        value: null,
+        title: Text('None'),
+      ),
+      ...templates.map(
+        (t) => RadioListTile<String?>(
+          value: t.letterheadId,
+          title: Text(t.name),
+        ),
+      ),
+    ],
+  ),
+),
 
             const Divider(),
 
@@ -158,33 +162,34 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
       ),
     );
 
-    if (result == null) return;
+    //if (result == null) return;
 
-    if (result == addToken) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const LetterheadEditorScreen(letterheadId: null),
-        ),
-      );
-      // Reload list next time user opens sheet (simple approach)
-      return;
+    
+
+   if (result == addToken) {
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const LetterheadEditorScreen(letterheadId: null),
+    ),
+  );
+  return;
+}
+
+if (result == manageToken) {
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const ManageLetterheadsScreen(),
+    ),
+  );
+  return;
+}
+
+// ✅ ALWAYS APPLY (including null = None)
+vm.setLetterhead(result);
+
     }
-
-    if (result == manageToken) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const ManageLetterheadsScreen(),
-        ),
-      );
-      return;
-    }
-
-    // Apply selection
-
-   
-    vm.setLetterhead(result);}
   
 ),
 
@@ -202,11 +207,14 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
           ),
         ],
       ),
-      body: PdfPreview(
-        build: (_) => _buildBytes(vm),
-        allowPrinting: true,
-        allowSharing: true,
-      ),
+     body: SizedBox.expand(
+  child: PdfPreview(
+    build: (_) => _buildBytes(vm),
+    allowPrinting: true,
+    allowSharing: true,
+  ),
+),
+
     );
   }
 }
