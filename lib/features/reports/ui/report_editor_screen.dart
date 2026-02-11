@@ -1,3 +1,8 @@
+
+
+
+
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -1171,14 +1176,43 @@ class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
     final vm = widget.vm;
     final fields = vm.subjectInfoDef.orderedFields;
 
+    // Build the subject fields editor using a Column.  The reorderable list
+    // view is wrapped in a ConstrainedBox to ensure it receives a bounded
+    // height when displayed in a bottom sheet.  Without this constraint the
+    // list would attempt to expand vertically without limit, causing the
+    // framework to complain that a Flexible child of a Column has unbounded
+    // constraints.  By limiting the maximum height based on the number of
+    // fields and the screen height, we ensure the widget always has a finite
+    // height and can scroll internally if necessary.
+    final screenHeight = MediaQuery.of(context).size.height;
+    // Estimate a sensible row height for each field.  ListTile's default
+    // height is approximately 56 logical pixels; add extra space for
+    // padding/spacers.
+    const double rowHeight = 60.0;
+    final double listHeight = fields.length * rowHeight;
+    // Limit the list height to at most 50% of the available screen height.
+    final double maxHeight = screenHeight * 0.5;
+    final double constrainedHeight = listHeight < maxHeight ? listHeight : maxHeight;
+
     return Column(
-      mainAxisSize: MainAxisSize.min,
+      // Let the Column expand vertically so its children can receive
+      // constraints from the bottom sheet.  Without setting mainAxisSize to
+      // max, a Flexible/ConstrainedBox inside a Column with min size can
+      // encounter unbounded height constraints.
+      mainAxisSize: MainAxisSize.max,
       children: [
         const ListTile(
           title: Text('Subject Fields'),
           subtitle: Text('Add, rename, reorder, set required.'),
         ),
-        Flexible(
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            // Provide both a max and min height.  The max height ensures the
+            // list doesn't grow indefinitely, while the min height ensures
+            // there is space for at least one item when fields is empty.
+            maxHeight: constrainedHeight,
+            minHeight: 0,
+          ),
           child: ReorderableListView.builder(
             shrinkWrap: true,
             itemCount: fields.length,
@@ -1453,48 +1487,69 @@ class _ImagesManagerState extends State<_ImagesManager> {
             child: Text('No images added yet.'),
           )
         else
-          Flexible(
-            child: GridView.builder(
-              shrinkWrap: true,
-              itemCount: vm.doc.images.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
+          // Wrap the grid view in a ConstrainedBox to ensure it has a bounded
+          // height.  Without this constraint the Flexible widget would be
+          // provided with unbounded height inside a bottom sheet, leading to
+          // an assertion error.  We compute the approximate height based on
+          // the number of rows in the grid and limit it to half of the
+          // available screen height so that the sheet doesn't overflow.
+          Builder(builder: (context) {
+            final int crossAxisCount = 3;
+            final int itemCount = vm.doc.images.length;
+            final int rowCount = (itemCount / crossAxisCount).ceil();
+            // Each tile is roughly 100 pixels high plus spacing; adjust as needed.
+            const double tileHeight = 110.0;
+            // Compute the full height for all rows including spacing.
+            final double computedHeight = rowCount * tileHeight + (rowCount - 1) * 8.0;
+            final double maxHeight = MediaQuery.of(context).size.height * 0.5;
+            final double gridHeight = computedHeight < maxHeight ? computedHeight : maxHeight;
+            return ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: gridHeight,
+                minHeight: 0,
               ),
-              itemBuilder: (_, i) {
-                final img = vm.doc.images[i];
-                return Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        File(img.filePath),
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: double.infinity,
-                      ),
-                    ),
-                    Positioned(
-                      right: 4,
-                      top: 4,
-                      child: IconButton.filledTonal(
-                        style: IconButton.styleFrom(
-                          padding: const EdgeInsets.all(6),
-                          minimumSize: const Size(32, 32),
+              child: GridView.builder(
+                shrinkWrap: true,
+                itemCount: itemCount,
+                gridDelegate:  SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossAxisCount,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                ),
+                itemBuilder: (_, i) {
+                  final img = vm.doc.images[i];
+                  return Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(
+                          File(img.filePath),
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          height: double.infinity,
                         ),
-                        icon: const Icon(Icons.close, size: 16),
-                        onPressed: () {
-                          vm.removeImage(img.id);
-                          setState(() {});
-                        },
                       ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
+                      Positioned(
+                        right: 4,
+                        top: 4,
+                        child: IconButton.filledTonal(
+                          style: IconButton.styleFrom(
+                            padding: const EdgeInsets.all(6),
+                            minimumSize: const Size(32, 32),
+                          ),
+                          icon: const Icon(Icons.close, size: 16),
+                          onPressed: () {
+                            vm.removeImage(img.id);
+                            setState(() {});
+                          },
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            );
+          }),
       ],
     );
   }
