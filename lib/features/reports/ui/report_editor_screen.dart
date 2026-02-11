@@ -67,8 +67,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   Color _accent(BuildContext context) => Theme.of(context).colorScheme.primary;
 
   // =========================================================
-  // ✅ CRITICAL: delay provider mutations until AFTER a sheet
-  // or dialog has fully closed (prevents _dependents crash)
+  // ✅ Run provider mutations AFTER routes/sheets/dialogs close
   // =========================================================
   void _afterClose(VoidCallback fn) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -155,7 +154,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   void _toggleMode(ReportEditorProvider vm) {
     final goingToFormMode = _editorMode == true;
     if (goingToFormMode) {
-      // Make Form mode valid BEFORE switching.
       vm.ensureFormReady();
       vm.clearSelection();
     }
@@ -212,7 +210,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           FilledButton(
@@ -280,7 +278,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
     if (res != true) return;
 
-    // ✅ safe mutate after dialog close
     _afterClose(() {
       vm.addSubjectField(
         title: titleText.isEmpty ? 'New field' : titleText,
@@ -397,9 +394,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           ],
         ),
       );
-      if (ok == true) {
-        _afterClose(vm.deleteSelected);
-      }
+      if (ok == true) _afterClose(vm.deleteSelected);
       return;
     }
   }
@@ -498,7 +493,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             tooltip: 'Preview',
             icon: const Icon(Icons.preview_outlined),
             onPressed: () {
-              // ✅ Ensure the doc is valid before PDF preview
               vm.ensureFormReady();
 
               final errs = _validateSubjectInfo(vm);
@@ -544,7 +538,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             ),
         ],
       ),
-
       floatingActionButton: _editorMode
           ? Padding(
               padding: EdgeInsets.only(bottom: hasSelection ? 180 : 0),
@@ -553,7 +546,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                   if (!hasSelection) {
                     final title = await _promptText(context, 'New top-level section');
                     if (title != null && title.trim().isNotEmpty) {
-                      // no sheet here, but still safe
                       _afterClose(() => vm.addTopLevelSection(title.trim()));
                     }
                   } else {
@@ -565,7 +557,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             )
           : null,
       floatingActionButtonLocation: _editorMode ? FloatingActionButtonLocation.endFloat : null,
-
       body: GestureDetector(
         onTap: vm.clearSelection,
         child: ListView(
@@ -573,10 +564,8 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
           children: [
             _reportTitleCard(vm),
             const SizedBox(height: _bigGap),
-
             _subjectInfoCard(vm),
             const SizedBox(height: _bigGap),
-
             _card(
               title: _editorMode ? 'Outline' : 'Form',
               emphasized: true,
@@ -621,7 +610,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                               .toList(growable: false),
                         ),
             ),
-
             const SizedBox(height: _bigGap),
             _imagesCard(context, vm),
             const SizedBox(height: _bigGap),
@@ -634,7 +622,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
   // ---------------- Form Mode UI ----------------
 
-  /// ✅ Never mutate provider inside this builder.
   Widget _formSection(BuildContext context, ReportEditorProvider vm, SectionNode s) {
     final sectionChildren = s.children.whereType<SectionNode>().toList(growable: false);
     final contentChildren = s.children.whereType<ContentNode>().toList(growable: false);
@@ -672,7 +659,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                 height: 44,
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('Missing content (tap Preview again or switch mode).'),
+                  child: Text('Preparing field…'),
                 ),
               ),
             ),
@@ -708,8 +695,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     );
   }
 
-  // ---------------- Report Title UI ----------------
-
   Widget _reportTitleCard(ReportEditorProvider vm) {
     return _card(
       title: 'Report',
@@ -725,8 +710,6 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       ),
     );
   }
-
-  // ---------------- Subject Info UI ----------------
 
   Widget _subjectInfoCard(ReportEditorProvider vm) {
     final def = vm.subjectInfoDef;
@@ -985,11 +968,10 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     final res = await showModalBottomSheet<_SectionEditResult>(
       context: context,
       showDragHandle: true,
-      builder: (_) => _SectionEditSheet(section: section),
+      builder: (sheetContext) => _SectionEditSheet(section: section),
     );
     if (res == null) return;
 
-    // ✅ schedule provider updates safely
     _afterClose(() {
       if (res.rename != null && res.rename!.trim().isNotEmpty) {
         vm.renameSection(section.id, res.rename!.trim());
@@ -1022,7 +1004,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => SafeArea(
+      builder: (sheetContext) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: _ImagesManager(vm: vm),
@@ -1171,7 +1153,6 @@ class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
           FilledButton(
             onPressed: () {
               final t = c.text.trim().isEmpty ? currentTitle : c.text.trim();
-              // ✅ safe: dialog closes first, then provider change
               Navigator.pop(dialogContext);
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 widget.vm.renameSubjectField(fieldKey, t);
@@ -1409,7 +1390,6 @@ class _ImagesManagerState extends State<_ImagesManager> {
                 selected: {vm.doc.placementChoice},
                 onSelectionChanged: (s) {
                   try {
-                    // This is not closing the sheet, so it is safe.
                     vm.setPlacementChoice(s.first);
                   } catch (e) {
                     ScaffoldMessenger.of(context).showSnackBar(

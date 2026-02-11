@@ -16,7 +16,6 @@ import '../ui/manage_letterhead.screen.dart';
 
 class ReportPreviewScreen extends StatefulWidget {
   const ReportPreviewScreen({super.key});
-
   @override
   State<ReportPreviewScreen> createState() => _ReportPreviewScreenState();
 }
@@ -25,14 +24,9 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
   final _renderer = PdfRendererService();
   bool _saving = false;
 
-  // ---------------------------------------------------------------------------
-  // 🔑 CRITICAL RULE:
-  // PdfPreview must NEVER depend on provider rebuilds.
-  // Always read provider INSIDE async methods, never via watch().
-  // ---------------------------------------------------------------------------
+  // Build the PDF bytes from the provider state.
   Future<Uint8List> _buildBytes() async {
     final vm = context.read<ReportEditorProvider>();
-
     final plan = buildPdfPlan(vm.doc);
     final repo = context.read<LetterheadsRepository>();
 
@@ -48,25 +42,20 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     );
   }
 
+  // Save the generated PDF to local storage.
   Future<File> _savePdfToLocal(Uint8List bytes) async {
     final dir = await getApplicationDocumentsDirectory();
     final folder = Directory('${dir.path}/saved_pdfs');
-
     if (!await folder.exists()) {
       await folder.create(recursive: true);
     }
-
-    final file = File(
-      '${folder.path}/report_${DateTime.now().millisecondsSinceEpoch}.pdf',
-    );
-
+    final file = File('${folder.path}/report_${DateTime.now().millisecondsSinceEpoch}.pdf');
     await file.writeAsBytes(bytes, flush: true);
     return file;
   }
 
   Future<void> _onSavePressed() async {
     if (_saving) return;
-
     final vm = context.read<ReportEditorProvider>();
     setState(() => _saving = true);
 
@@ -74,7 +63,6 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
       await vm.save();
       final bytes = await _buildBytes();
       final file = await _savePdfToLocal(bytes);
-
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('PDF saved: ${file.path.split('/').last}')),
@@ -84,14 +72,11 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Letterhead selector (FULL, SAFE)
-  // ---------------------------------------------------------------------------
+  // Opens the letterhead selector.
   Future<void> _openLetterheadSheet() async {
     final vm = context.read<ReportEditorProvider>();
     final repo = context.read<LetterheadsRepository>();
     final templates = await repo.loadAll();
-
     if (!mounted) return;
 
     const addToken = '__add__';
@@ -107,32 +92,21 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
           padding: const EdgeInsets.only(bottom: 12),
           children: [
             const SizedBox(height: 12),
-            const Center(
-              child: Text(
-                'Select Letterhead',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
+            const Center(child: Text('Select Letterhead', style: TextStyle(fontWeight: FontWeight.bold))),
             const Divider(),
-
-            RadioListTile<String?>(
-              value: null,
-              groupValue: vm.doc.letterheadId,
+            // "None" option:
+            ListTile(
+              leading: Radio<String?>(value: null, groupValue: vm.doc.letterheadId, onChanged: (_) {}),
               title: const Text('None'),
-              onChanged: (v) => Navigator.pop(sheetContext, v),
+              onTap: () => Navigator.pop(sheetContext, null),
             ),
-
-            ...templates.map(
-              (t) => RadioListTile<String?>(
-                value: t.letterheadId,
-                groupValue: vm.doc.letterheadId,
-                title: Text(t.name),
-                onChanged: (v) => Navigator.pop(sheetContext, v),
-              ),
-            ),
-
+            // Existing templates:
+            ...templates.map((t) => ListTile(
+                  leading: Radio<String?>(value: t.letterheadId, groupValue: vm.doc.letterheadId, onChanged: (_) {}),
+                  title: Text(t.name),
+                  onTap: () => Navigator.pop(sheetContext, t.letterheadId),
+                )),
             const Divider(),
-
             ListTile(
               leading: const Icon(Icons.add),
               title: const Text('Add new letterhead'),
@@ -153,9 +127,7 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     if (result == addToken) {
       await Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => const LetterheadEditorScreen(letterheadId: null),
-        ),
+        MaterialPageRoute(builder: (_) => const LetterheadEditorScreen(letterheadId: null)),
       );
       return;
     }
@@ -163,25 +135,20 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
     if (result == manageToken) {
       await Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => const ManageLetterheadsScreen(),
-        ),
+        MaterialPageRoute(builder: (_) => const ManageLetterheadsScreen()),
       );
       return;
     }
 
-    // 🔑 CRITICAL: update provider AFTER sheet closes
+    // Update provider only after the sheet has closed.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      vm.setLetterhead(result); // null = None
+      if (mounted) vm.setLetterhead(result);
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // UI
-  // ---------------------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
+    // LayoutBuilder ensures PdfPreview gets bounded constraints.
     return Scaffold(
       appBar: AppBar(
         title: const Text('Preview'),
@@ -203,17 +170,20 @@ class _ReportPreviewScreenState extends State<ReportPreviewScreen> {
           ),
         ],
       ),
-
-      // ---------------------------------------------------------------------
-      // 🔑 CRITICAL FIX FOR INLINE IMAGE CRASH
-      // PdfPreview MUST be given tight constraints
-      // ---------------------------------------------------------------------
-      body: SizedBox.expand(
-        child: PdfPreview(
-          build: (_) => _buildBytes(),
-          allowPrinting: true,
-          allowSharing: true,
-        ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return ConstrainedBox(
+            constraints: BoxConstraints.tightFor(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+            ),
+            child: PdfPreview(
+              build: (_) => _buildBytes(),
+              allowPrinting: true,
+              allowSharing: true,
+            ),
+          );
+        },
       ),
     );
   }
