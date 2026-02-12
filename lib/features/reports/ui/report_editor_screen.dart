@@ -153,6 +153,30 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     return errors;
   }
 
+  void _pruneDeadContentControllers(ReportEditorProvider vm) {
+  final liveIds = <String>{};
+
+  void walk(SectionNode s) {
+    for (final n in s.children) {
+      if (n is ContentNode) liveIds.add(n.id);
+      if (n is SectionNode) walk(n);
+    }
+  }
+
+  for (final r in vm.doc.roots) {
+    walk(r);
+  }
+
+  _contentControllers.removeWhere((id, controller) {
+    if (!liveIds.contains(id)) {
+      controller.dispose();
+      return true;
+    }
+    return false;
+  });
+}
+
+
   // =========================
   // ✅ Mode switching (safe)
   // =========================
@@ -166,26 +190,25 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   }
 
   // ---------------- Dialog helpers ----------------
+Future<String?> _promptText(
+  BuildContext context,
+  String title, {
+  String hint = 'Type…',
+}) async {
+  final controller = TextEditingController();
 
-  Future<String?> _promptText(
-    BuildContext context,
-    String title, {
-    String hint = 'Type…',
-  }) async {
-    final c = TextEditingController();
-
-    final res = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
+  final result = await showDialog<String>(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
         title: Text(title),
         content: TextField(
-          controller: c,
+          controller: controller,
+          autofocus: true,
           decoration: InputDecoration(
             hintText: hint,
             border: const OutlineInputBorder(),
-            isDense: true,
           ),
-          autofocus: true,
         ),
         actions: [
           TextButton(
@@ -193,16 +216,20 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, c.text),
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
             child: const Text('OK'),
           ),
         ],
-      ),
-    );
+      );
+    },
+  );
 
-    c.dispose();
-    return res;
-  }
+  // delay disposal (fixes crash)
+  Future.microtask(() => controller.dispose());
+
+  return result;
+}
+
 
   Future<bool?> askTemplateSaveMode(BuildContext context) {
     return showDialog<bool>(
@@ -311,153 +338,176 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   }
 
   // ---------------- Global Add (structure) ----------------
+Future<void> _showGlobalAddSheet(BuildContext context, ReportEditorProvider vm) async {
+  final hasSelection = vm.selectedNodeId != null;
+  final selectedIsSection = vm.selectedIsSection;
 
-  Future<void> _showGlobalAddSheet(BuildContext context, ReportEditorProvider vm) async {
-    final hasSelection = vm.selectedNodeId != null;
-    final selectedIsSection = vm.selectedIsSection;
-
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(title: Text('Structure')),
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const ListTile(title: Text('Structure')),
+          ListTile(
+            leading: const Icon(Icons.view_agenda_outlined),
+            title: const Text('Add top-level section'),
+            onTap: () => Navigator.pop(sheetContext, 'add_top'),
+          ),
+          if (hasSelection) ...[
             ListTile(
-              leading: const Icon(Icons.view_agenda_outlined),
-              title: const Text('Add top-level section'),
-              onTap: () => Navigator.pop(sheetContext, 'add_top'),
+              leading: const Icon(Icons.library_add_outlined),
+              title: const Text('Add same-level section'),
+              onTap: () => Navigator.pop(sheetContext, 'add_same'),
             ),
-            if (hasSelection) ...[
+            if (selectedIsSection)
               ListTile(
-                leading: const Icon(Icons.library_add_outlined),
-                title: const Text('Add same-level section'),
-                onTap: () => Navigator.pop(sheetContext, 'add_same'),
+                leading: const Icon(Icons.layers_outlined),
+                title: const Text('Wrap selected section'),
+                onTap: () => Navigator.pop(sheetContext, 'wrap'),
               ),
-              if (selectedIsSection)
-                ListTile(
-                  leading: const Icon(Icons.layers_outlined),
-                  title: const Text('Wrap selected section'),
-                  onTap: () => Navigator.pop(sheetContext, 'wrap'),
-                ),
-              ListTile(
-                leading: const Icon(Icons.delete_outline),
-                title: const Text('Delete selected'),
-                onTap: () => Navigator.pop(sheetContext, 'delete'),
-              ),
-            ],
-            const SizedBox(height: 12),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete selected'),
+              onTap: () => Navigator.pop(sheetContext, 'delete'),
+            ),
           ],
-        ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    ),
+  );
+
+  // ✅ context may be invalid after await
+  if (!mounted) return;
+
+  if (action == null) return;
+
+  if (action == 'add_top') {
+    final title = await _promptText(context, 'New top-level section');
+
+    if (!mounted) return; // ✅ after await
+
+    if (title != null && title.trim().isNotEmpty) {
+      _afterClose(() => vm.addTopLevelSection(title.trim()));
+    }
+    return;
+  }
+
+  if (!hasSelection) return;
+
+  if (action == 'add_same') {
+    final title = await _promptText(context, 'New same-level section');
+
+    if (!mounted) return; // ✅ after await
+
+    if (title != null && title.trim().isNotEmpty) {
+      _afterClose(() => vm.addSameLevelSection(title.trim()));
+    }
+    return;
+  }
+
+  if (action == 'wrap') {
+    final title = await _promptText(
+      context,
+      'Wrapper section title',
+      hint: 'e.g., Findings',
+    );
+
+    if (!mounted) return; // ✅ after await
+
+    if (title != null && title.trim().isNotEmpty) {
+      _afterClose(() => vm.wrapSelectedSection(title.trim()));
+    }
+    return;
+  }
+
+  if (action == 'delete') {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete selected?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
 
-    if (action == null) return;
+    if (!mounted) return; // ✅ after await
 
-    if (action == 'add_top') {
-      final title = await _promptText(context, 'New top-level section');
-      if (title != null && title.trim().isNotEmpty) {
-        _afterClose(() => vm.addTopLevelSection(title.trim()));
-      }
-      return;
-    }
-
-    if (!hasSelection) return;
-
-    if (action == 'add_same') {
-      final title = await _promptText(context, 'New same-level section');
-      if (title != null && title.trim().isNotEmpty) {
-        _afterClose(() => vm.addSameLevelSection(title.trim()));
-      }
-      return;
-    }
-
-    if (action == 'wrap') {
-      final title = await _promptText(context, 'Wrapper section title', hint: 'e.g., Findings');
-      if (title != null && title.trim().isNotEmpty) {
-        _afterClose(() => vm.wrapSelectedSection(title.trim()));
-      }
-      return;
-    }
-
-    if (action == 'delete') {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Delete selected?'),
-          content: const Text('This cannot be undone.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Delete'),
-            ),
-          ],
-        ),
-      );
-      if (ok == true) _afterClose(vm.deleteSelected);
-      return;
-    }
+    if (ok == true) _afterClose(vm.deleteSelected);
+    return;
   }
+}
 
   // ---------------- Add Here (context) ----------------
+Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) async {
+  if (vm.selectedNodeId == null) return;
 
-  Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) async {
-    if (vm.selectedNodeId == null) return;
+  final canSub = vm.canAddSubsectionHere;
+  final canContent = vm.canAddContentHere;
 
-    final canSub = vm.canAddSubsectionHere;
-    final canContent = vm.canAddContentHere;
-
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const ListTile(title: Text('Add here')),
-            if (canSub)
-              ListTile(
-                leading: const Icon(Icons.subdirectory_arrow_right),
-                title: const Text('Add subsection'),
-                onTap: () => Navigator.pop(sheetContext, 'subsection'),
-              ),
-            if (canContent)
-              ListTile(
-                leading: const Icon(Icons.notes_outlined),
-                title: const Text('Add content'),
-                onTap: () => Navigator.pop(sheetContext, 'content'),
-              ),
-            if (!canSub && !canContent)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: Text('Nothing can be added here.'),
-              ),
-            const SizedBox(height: 12),
-          ],
-        ),
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const ListTile(title: Text('Add here')),
+          if (canSub)
+            ListTile(
+              leading: const Icon(Icons.subdirectory_arrow_right),
+              title: const Text('Add subsection'),
+              onTap: () => Navigator.pop(sheetContext, 'subsection'),
+            ),
+          if (canContent)
+            ListTile(
+              leading: const Icon(Icons.notes_outlined),
+              title: const Text('Add content'),
+              onTap: () => Navigator.pop(sheetContext, 'content'),
+            ),
+          if (!canSub && !canContent)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text('Nothing can be added here.'),
+            ),
+          const SizedBox(height: 12),
+        ],
       ),
-    );
+    ),
+  );
 
-    if (action == null) return;
+  // ✅ context may be invalid after await
+  if (!mounted) return;
 
-    if (action == 'subsection') {
-      final title = await _promptText(context, 'New subsection');
-      if (title != null && title.trim().isNotEmpty) {
-        _afterClose(() => vm.addHereSubsection(title.trim()));
-      }
-      return;
+  if (action == null) return;
+
+  if (action == 'subsection') {
+    final title = await _promptText(context, 'New subsection');
+
+    if (!mounted) return; // ✅ after await
+
+    if (title != null && title.trim().isNotEmpty) {
+      _afterClose(() => vm.addHereSubsection(title.trim()));
     }
-
-    if (action == 'content') {
-      _afterClose(vm.addHereContent);
-      return;
-    }
+    return;
   }
+
+  if (action == 'content') {
+    _afterClose(vm.addHereContent);
+    return;
+  }
+}
 
   // ---------------- Build ----------------
 
@@ -467,6 +517,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
     _syncSubjectControllers(vm);
     _syncContentControllers(vm);
+    _pruneDeadContentControllers(vm); 
     _syncSignerControllers(vm);
     _syncReportTitleController(vm);
 
@@ -535,7 +586,7 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
                   includeContent: includeContent,
                 );
 
-                if (!context.mounted) return;
+                if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Template saved')),
                 );
@@ -901,27 +952,30 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
             Padding(
               padding: const EdgeInsets.only(left: 24),
               child: Row(
-                children: [
-                  if (showAddHere)
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () => _showAddHereSheet(context, vm),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add here'),
-                      ),
-                    ),
-                  if (showDeleteContent) ...[
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _afterClose(vm.deleteContentForSelectedSection),
-                        icon: const Icon(Icons.delete_outline),
-                        label: const Text('Delete content'),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+  children: [
+    if (showAddHere)
+      Flexible(
+        fit: FlexFit.loose,
+        child: FilledButton.icon(
+          onPressed: () => _showAddHereSheet(context, vm),
+          icon: const Icon(Icons.add),
+          label: const Text('Add here'),
+        ),
+      ),
+    if (showDeleteContent) ...[
+      const SizedBox(width: 8),
+      Flexible(
+        fit: FlexFit.loose,
+        child: OutlinedButton.icon(
+          onPressed: () => _afterClose(vm.deleteContentForSelectedSection),
+          icon: const Icon(Icons.delete_outline),
+          label: const Text('Delete content'),
+        ),
+      ),
+    ],
+  ],
+)
+
             ),
           const SizedBox(height: 8),
           if (!section.collapsed)
@@ -1223,7 +1277,7 @@ class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
             itemBuilder: (_, i) {
               final f = fields[i];
               return ListTile(
-                key: ValueKey(f.key),
+                key: ValueKey('${f.key}_$i'),
                 title: Text(f.title),
                 subtitle: Text(f.isSystem ? 'System field' : 'Custom field'),
                 leading: const Icon(Icons.drag_handle),
@@ -1399,158 +1453,184 @@ class _ImagesManager extends StatefulWidget {
 class _ImagesManagerState extends State<_ImagesManager> {
   final _imageService = ImageService();
 
+  void _showErr(Object e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final vm = widget.vm;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const ListTile(title: Text('Images')),
-        Row(
-          children: [
-            Expanded(
-              child: SegmentedButton<ImagePlacementChoice>(
-                segments: const [
-                  ButtonSegment(
-                    value: ImagePlacementChoice.attachmentsOnly,
-                    label: Text('Attachments only'),
-                  ),
-                  ButtonSegment(
-                    value: ImagePlacementChoice.inlinePage1,
-                    label: Text('Inline Page 1'),
-                  ),
-                ],
-                selected: {vm.doc.placementChoice},
-                onSelectionChanged: (s) {
-                  try {
-                    vm.setPlacementChoice(s.first);
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-                    );
-                  }
-                  setState(() {});
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text('Max images in this mode: ${vm.doc.maxImages}'),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () async {
-                  try {
-                    final files = await _imageService.pickMultiFromGallery();
-                    if (files.isEmpty) return;
-                    vm.addImages(files.map((f) => f.path).toList());
-                    setState(() {});
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.photo_library_outlined),
-                label: const Text('Gallery'),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () async {
-                  try {
-                    final file = await _imageService.pickFromCamera();
-                    if (file == null) return;
-                    vm.addImages([file.path]);
-                    setState(() {});
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.photo_camera_outlined),
-                label: const Text('Camera'),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        if (vm.doc.images.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Text('No images added yet.'),
-          )
-        else
-          // Wrap the grid view in a ConstrainedBox to ensure it has a bounded
-          // height.  Without this constraint the Flexible widget would be
-          // provided with unbounded height inside a bottom sheet, leading to
-          // an assertion error.  We compute the approximate height based on
-          // the number of rows in the grid and limit it to half of the
-          // available screen height so that the sheet doesn't overflow.
-          Builder(builder: (context) {
-            final int crossAxisCount = 3;
-            final int itemCount = vm.doc.images.length;
-            final int rowCount = (itemCount / crossAxisCount).ceil();
-            // Each tile is roughly 100 pixels high plus spacing; adjust as needed.
-            const double tileHeight = 110.0;
-            // Compute the full height for all rows including spacing.
-            final double computedHeight = rowCount * tileHeight + (rowCount - 1) * 8.0;
-            final double maxHeight = MediaQuery.of(context).size.height * 0.5;
-            final double gridHeight = computedHeight < maxHeight ? computedHeight : maxHeight;
-            return ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: gridHeight,
-                minHeight: 0,
-              ),
-              child: GridView.builder(
-                shrinkWrap: true,
-                itemCount: itemCount,
-                gridDelegate:  SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: crossAxisCount,
-                  mainAxisSpacing: 8,
-                  crossAxisSpacing: 8,
+    final int crossAxisCount = 3;
+    final int itemCount = vm.doc.images.length;
+    final int rowCount = (itemCount / crossAxisCount).ceil();
+    const double tileHeight = 110.0;
+    final double computedHeight =
+        rowCount <= 0 ? 0 : (rowCount * tileHeight + (rowCount - 1) * 8.0);
+    final double maxGridHeight = MediaQuery.of(context).size.height * 0.45;
+    final double gridHeight =
+        computedHeight < maxGridHeight ? computedHeight : maxGridHeight;
+
+    return SafeArea(
+      child: ListView(
+        // ListView prevents RenderFlex overflow in bottom sheets
+        padding: EdgeInsets.zero,
+        shrinkWrap: true,
+        children: [
+          const ListTile(title: Text('Images')),
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SegmentedButton<ImagePlacementChoice>(
+              segments: const [
+                ButtonSegment(
+                  value: ImagePlacementChoice.attachmentsOnly,
+                  label: Text('Attachments only'),
                 ),
-                itemBuilder: (_, i) {
-                  final img = vm.doc.images[i];
-                  return Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.file(
-                          File(img.filePath),
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          height: double.infinity,
-                        ),
-                      ),
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: IconButton.filledTonal(
-                          style: IconButton.styleFrom(
-                            padding: const EdgeInsets.all(6),
-                            minimumSize: const Size(32, 32),
+                ButtonSegment(
+                  value: ImagePlacementChoice.inlinePage1,
+                  label: Text('Inline Page 1'),
+                ),
+              ],
+              selected: {vm.doc.placementChoice},
+              onSelectionChanged: (s) {
+                try {
+                  vm.setPlacementChoice(s.first);
+                  if (mounted) setState(() {});
+                } catch (e) {
+                  _showErr(e);
+                }
+              },
+            ),
+          ),
+
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text('Max images in this mode: ${vm.doc.maxImages}'),
+          ),
+          const SizedBox(height: 12),
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () async {
+                      try {
+                        final files = await _imageService.pickMultiFromGallery();
+                        if (!mounted) return;
+
+                        if (files.isEmpty) return;
+
+                        vm.addImages(files.map((f) => f.path).toList());
+                        if (mounted) setState(() {});
+                      } catch (e) {
+                        _showErr(e);
+                      }
+                    },
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: const Text('Gallery'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () async {
+                      try {
+                        final file = await _imageService.pickFromCamera();
+                        if (!mounted) return;
+
+                        if (file == null) return;
+
+                        vm.addImages([file.path]);
+                        if (mounted) setState(() {});
+                      } catch (e) {
+                        _showErr(e);
+                      }
+                    },
+                    icon: const Icon(Icons.photo_camera_outlined),
+                    label: const Text('Camera'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          if (vm.doc.images.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Text('No images added yet.'),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: gridHeight <= 0 ? 1 : gridHeight,
+                ),
+                child: GridView.builder(
+                  // Important: GridView must NOT try to scroll inside sheet
+                  physics: const NeverScrollableScrollPhysics(),
+                  shrinkWrap: true,
+                  itemCount: itemCount,
+                  gridDelegate:  SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: crossAxisCount,
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 8,
+                  ),
+                  itemBuilder: (_, i) {
+                    final img = vm.doc.images[i];
+                    return Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.file(
+                            File(img.filePath),
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
                           ),
-                          icon: const Icon(Icons.close, size: 16),
-                          onPressed: () {
-                            vm.removeImage(img.id);
-                            setState(() {});
-                          },
                         ),
-                      ),
-                    ],
-                  );
-                },
+                        Positioned(
+                          right: 4,
+                          top: 4,
+                          child: IconButton.filledTonal(
+                            style: IconButton.styleFrom(
+                              padding: const EdgeInsets.all(6),
+                              minimumSize: const Size(32, 32),
+                            ),
+                            icon: const Icon(Icons.close, size: 16),
+                            onPressed: () {
+                              vm.removeImage(img.id);
+                              if (mounted) setState(() {});
+                            },
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
-            );
-          }),
-      ],
+            ),
+
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
     );
   }
 }

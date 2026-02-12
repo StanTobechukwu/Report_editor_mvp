@@ -47,13 +47,10 @@ class PdfRendererService {
     }
 
     // ---------- Title ----------
-    final customTitle = doc.reportTitle.trim();
-final subjectName = doc.subjectInfo.valueOf('subjectName').trim();
-
-final titleText = doc.reportTitle.trim().isNotEmpty
-    ? doc.reportTitle.trim()
-    : (subjectName.isEmpty ? 'Medical Report' : '$subjectName Report');
-
+    final subjectName = doc.subjectInfo.valueOf('subjectName').trim();
+    final titleText = doc.reportTitle.trim().isNotEmpty
+        ? doc.reportTitle.trim()
+        : (subjectName.isEmpty ? 'Medical Report' : '$subjectName Report');
 
     // ---------- Page rules ----------
     final hasAttachments = attachmentImgs.isNotEmpty;
@@ -62,15 +59,29 @@ final titleText = doc.reportTitle.trim().isNotEmpty
     // Signature only allowed on page 1 if nothing else follows.
     final canPlaceSignatureOnPage1 = !hasAttachments && !hasRemainingText;
 
+    // A4 usable size (we will compute safe body height)
+    const pageFormat = PdfPageFormat.a4;
+    const pageMargin = 28.0;
+
+    // We will reserve some fixed space for header/footer if letterhead exists.
+    // (If your header/footer varies a lot, bump these values slightly.)
+    final headerReserve = (letterhead != null) ? 90.0 : 0.0;
+    final footerReserve = (letterhead != null) ? 45.0 : 0.0;
+
+    // Safe usable height for content body
+    final usableHeight =
+        pageFormat.height - (pageMargin * 2) - headerReserve - footerReserve;
+
     final pdf = pw.Document();
 
     // ================= PAGE 1 =================
     pdf.addPage(
       pw.Page(
         theme: theme,
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(28),
+        pageFormat: pageFormat,
+        margin: const pw.EdgeInsets.all(pageMargin),
         build: (_) {
+          // Build "mainContent" with no Expanded
           final mainContent = pw.Container(
             padding: const pw.EdgeInsets.all(12),
             decoration: pw.BoxDecoration(
@@ -81,16 +92,32 @@ final titleText = doc.reportTitle.trim().isNotEmpty
                 ? pw.Row(
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
-                      pw.Expanded(child: _textBlock(firstPageText)),
+                      // ✅ remove Expanded; use a fixed width split via Flexible-like sizing:
+                      // We do it by giving the right column a fixed width and left column takes remaining.
+                      pw.Container(
+                        width: pageFormat.availableWidth - (pageMargin * 2) - 160 - 12,
+                        child: _textBlock(firstPageText),
+                      ),
                       pw.SizedBox(width: 12),
                       pw.SizedBox(
                         width: 160,
-                        child: _inlineColumnFixed(inlineImgs), // ✅ stable 4 slots
+                        // ✅ this now uses fixed heights (no Expanded inside)
+                        child: _inlineColumnFixed(inlineImgs, totalHeight: 420),
                       ),
                     ],
                   )
                 : _textBlock(firstPageText),
           );
+
+          // Estimate title + subject block heights
+          final titleHeight = 34.0; // title + spacing
+          final subjectBlockHeight = (doc.subjectInfoDef.enabled) ? 90.0 : 0.0;
+
+          // Signature height if included
+          final signatureHeight = canPlaceSignatureOnPage1 ? 130.0 : 0.0;
+
+          // Remaining height for main content
+          final mainHeight = usableHeight - titleHeight - subjectBlockHeight - signatureHeight - 12;
 
           final body = pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.stretch,
@@ -100,18 +127,22 @@ final titleText = doc.reportTitle.trim().isNotEmpty
                 style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
               ),
               pw.SizedBox(height: 12),
+
               if (doc.subjectInfoDef.enabled) ...[
+                // keep subject info compact; it will wrap naturally
                 _subjectInfoBlock(doc),
                 pw.SizedBox(height: 12),
               ],
 
+              // ✅ force mainContent to a bounded height
+              pw.SizedBox(
+                height: mainHeight > 60 ? mainHeight : 60,
+                child: mainContent,
+              ),
+
               if (canPlaceSignatureOnPage1) ...[
-                mainContent,
-                pw.SizedBox(height: 16),
+                pw.SizedBox(height: 12),
                 _signatureBlock(doc, signatureImg),
-              ] else ...[
-                // ✅ prevents “shrinking” when signature NOT on page 1
-                pw.Expanded(child: mainContent),
               ],
             ],
           );
@@ -120,6 +151,9 @@ final titleText = doc.reportTitle.trim().isNotEmpty
             body: body,
             letterhead: letterhead,
             logo: logo,
+            headerReserve: headerReserve,
+            footerReserve: footerReserve,
+            usableHeight: usableHeight,
           );
         },
       ),
@@ -133,9 +167,12 @@ final titleText = doc.reportTitle.trim().isNotEmpty
         pdf.addPage(
           pw.Page(
             theme: theme,
-            pageFormat: PdfPageFormat.a4,
-            margin: const pw.EdgeInsets.all(28),
+            pageFormat: pageFormat,
+            margin: const pw.EdgeInsets.all(pageMargin),
             build: (_) {
+              final titleH = 30.0;
+              final gridH = usableHeight - titleH - 12;
+
               final body = pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.stretch,
                 children: [
@@ -145,8 +182,10 @@ final titleText = doc.reportTitle.trim().isNotEmpty
                   ),
                   pw.SizedBox(height: 12),
 
-                  pw.Expanded(
-                    child: _attachmentsGridFixed(chunk), // ✅ stable 8 slots
+                  // ✅ bounded height (no Expanded)
+                  pw.SizedBox(
+                    height: gridH > 60 ? gridH : 60,
+                    child: _attachmentsGridFixed(chunk),
                   ),
                 ],
               );
@@ -155,6 +194,9 @@ final titleText = doc.reportTitle.trim().isNotEmpty
                 body: body,
                 letterhead: letterhead,
                 logo: logo,
+                headerReserve: headerReserve,
+                footerReserve: footerReserve,
+                usableHeight: usableHeight,
               );
             },
           ),
@@ -167,24 +209,33 @@ final titleText = doc.reportTitle.trim().isNotEmpty
       pdf.addPage(
         pw.Page(
           theme: theme,
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(28),
+          pageFormat: pageFormat,
+          margin: const pw.EdgeInsets.all(pageMargin),
           build: (_) {
+            // We allocate text area + signature at bottom.
+            final sigH = 135.0;
+            final textH = usableHeight - sigH - 12;
+
             final body = pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
-                if (hasRemainingText) ...[
-                  pw.Container(
-                    padding: const pw.EdgeInsets.all(12),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border.all(color: PdfColors.grey300),
-                      borderRadius: pw.BorderRadius.circular(12),
+                if (hasRemainingText)
+                  pw.SizedBox(
+                    height: textH > 60 ? textH : 60,
+                    child: pw.Container(
+                      padding: const pw.EdgeInsets.all(12),
+                      decoration: pw.BoxDecoration(
+                        border: pw.Border.all(color: PdfColors.grey300),
+                        borderRadius: pw.BorderRadius.circular(12),
+                      ),
+                      child: _textBlock(remainingText),
                     ),
-                    child: _textBlock(remainingText),
-                  ),
-                  pw.SizedBox(height: 16),
-                ],
-                if (!hasRemainingText) pw.Spacer(),
+                  )
+                else
+                  // If no remaining text, just add spacing so signature sits toward bottom
+                  pw.SizedBox(height: textH > 0 ? textH : 0),
+
+                pw.SizedBox(height: 12),
                 _signatureBlock(doc, signatureImg),
               ],
             );
@@ -193,6 +244,9 @@ final titleText = doc.reportTitle.trim().isNotEmpty
               body: body,
               letterhead: letterhead,
               logo: logo,
+              headerReserve: headerReserve,
+              footerReserve: footerReserve,
+              usableHeight: usableHeight,
             );
           },
         ),
@@ -210,13 +264,29 @@ final titleText = doc.reportTitle.trim().isNotEmpty
     required pw.Widget body,
     required LetterheadTemplate? letterhead,
     required pw.MemoryImage? logo,
+    required double headerReserve,
+    required double footerReserve,
+    required double usableHeight,
   }) {
+    // ✅ no Expanded here
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
-        if (letterhead != null) _letterheadHeader(letterhead, logo),
-        pw.Expanded(child: body),
-        if (letterhead != null) _letterheadFooter(letterhead),
+        if (letterhead != null)
+          pw.SizedBox(
+            height: headerReserve,
+            child: _letterheadHeader(letterhead, logo),
+          ),
+        // ✅ bounded body height
+        pw.SizedBox(
+          height: usableHeight,
+          child: body,
+        ),
+        if (letterhead != null)
+          pw.SizedBox(
+            height: footerReserve,
+            child: _letterheadFooter(letterhead),
+          ),
       ],
     );
   }
@@ -276,20 +346,20 @@ final titleText = doc.reportTitle.trim().isNotEmpty
     }
 
     return pw.Container(
-      padding: const pw.EdgeInsets.only(bottom: 8),
+      padding: const pw.EdgeInsets.only(bottom: 6),
       child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.stretch,
         children: [
           if (logo != null)
             pw.Container(
               alignment: align,
-              height: 46,
+              height: 40,
               child: pw.Image(logo, fit: pw.BoxFit.contain),
             ),
           line(lh.headerLine1, size: 14, bold: true),
           line(lh.headerLine2, size: 10),
           line(lh.headerLine3, size: 10),
-          pw.SizedBox(height: 6),
+          pw.SizedBox(height: 4),
           pw.Divider(),
         ],
       ),
@@ -303,21 +373,21 @@ final titleText = doc.reportTitle.trim().isNotEmpty
     if (left.isEmpty && right.isEmpty) return pw.SizedBox();
 
     return pw.Container(
-      padding: const pw.EdgeInsets.only(top: 8),
+      padding: const pw.EdgeInsets.only(top: 6),
       child: pw.Column(
         children: [
           pw.Divider(),
           pw.Row(
             children: [
-              pw.Expanded(
+              pw.Container(
+                width: 250,
                 child: pw.Text(left, style: const pw.TextStyle(fontSize: 9)),
               ),
-              pw.Expanded(
-                child: pw.Text(
-                  right,
-                  style: const pw.TextStyle(fontSize: 9),
-                  textAlign: pw.TextAlign.right,
-                ),
+              pw.Spacer(), // This is safe inside Row with finite width; but to be extra safe remove it:
+              pw.Text(
+                right,
+                style: const pw.TextStyle(fontSize: 9),
+                textAlign: pw.TextAlign.right,
               ),
             ],
           ),
@@ -367,7 +437,8 @@ final titleText = doc.reportTitle.trim().isNotEmpty
                 ),
               ),
             ),
-            pw.Expanded(
+            pw.Container(
+              width: 260,
               child: pw.Text(v, style: const pw.TextStyle(fontSize: 10)),
             ),
           ],
@@ -389,9 +460,10 @@ final titleText = doc.reportTitle.trim().isNotEmpty
           pw.Row(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              pw.Expanded(child: fieldRow(left.$1, left.$2)),
+              pw.Container(width: 250, child: fieldRow(left.$1, left.$2)),
               pw.SizedBox(width: 12),
-              pw.Expanded(
+              pw.Container(
+                width: 250,
                 child: right == null ? pw.SizedBox() : fieldRow(right.$1, right.$2),
               ),
             ],
@@ -463,25 +535,24 @@ final titleText = doc.reportTitle.trim().isNotEmpty
                 style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
               ),
               pw.SizedBox(width: 8),
-              pw.Expanded(
-                child: pw.Container(
-                  height: 60,
-                  decoration: pw.BoxDecoration(
-                    border: pw.Border.all(color: PdfColors.grey300),
-                    borderRadius: pw.BorderRadius.circular(10),
-                  ),
-                  alignment: pw.Alignment.centerLeft,
-                  padding: const pw.EdgeInsets.symmetric(horizontal: 8),
-                  child: signature == null
-                      ? pw.Text(
-                          '(not provided)',
-                          style: const pw.TextStyle(
-                            fontSize: 10,
-                            color: PdfColors.grey700,
-                          ),
-                        )
-                      : pw.Image(signature, fit: pw.BoxFit.contain),
+              pw.Container(
+                height: 60,
+                width: 340,
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: PdfColors.grey300),
+                  borderRadius: pw.BorderRadius.circular(10),
                 ),
+                alignment: pw.Alignment.centerLeft,
+                padding: const pw.EdgeInsets.symmetric(horizontal: 8),
+                child: signature == null
+                    ? pw.Text(
+                        '(not provided)',
+                        style: const pw.TextStyle(
+                          fontSize: 10,
+                          color: PdfColors.grey700,
+                        ),
+                      )
+                    : pw.Image(signature, fit: pw.BoxFit.contain),
               ),
             ],
           ),
@@ -499,14 +570,19 @@ final titleText = doc.reportTitle.trim().isNotEmpty
         style: const pw.TextStyle(fontSize: 11, lineSpacing: 2),
       );
 
-  /// ✅ FIXED + STABLE: 4 equal slots that FILL the column height
-  /// (This prevents the “shrinking upward” behavior.)
-  pw.Widget _inlineColumnFixed(List<pw.MemoryImage> images) {
+  /// ✅ No Expanded. We use fixed slot heights.
+  pw.Widget _inlineColumnFixed(
+    List<pw.MemoryImage> images, {
+    required double totalHeight,
+  }) {
     const slots = 4;
     const gap = 10.0;
 
+    final slotHeight = (totalHeight - (gap * (slots - 1))) / slots;
+
     pw.Widget slot(pw.MemoryImage? img) {
       return pw.Container(
+        height: slotHeight,
         decoration: pw.BoxDecoration(
           border: pw.Border.all(color: PdfColors.grey300),
           borderRadius: pw.BorderRadius.circular(12),
@@ -533,7 +609,7 @@ final titleText = doc.reportTitle.trim().isNotEmpty
 
     final children = <pw.Widget>[];
     for (int i = 0; i < slots; i++) {
-      children.add(pw.Expanded(child: slot(filled[i])));
+      children.add(slot(filled[i]));
       if (i != slots - 1) children.add(pw.SizedBox(height: gap));
     }
 
@@ -543,7 +619,8 @@ final titleText = doc.reportTitle.trim().isNotEmpty
     );
   }
 
-  /// ✅ Fixed 8 slots (2 cols × 4 rows) for attachment pages
+  /// ✅ Attachments grid is fine (GridView is designed for this),
+  /// but we must ensure it is placed inside a bounded height outside.
   pw.Widget _attachmentsGridFixed(List<pw.MemoryImage> images) {
     const slots = 8;
     const cols = 2;
