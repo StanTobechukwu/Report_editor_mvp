@@ -1,19 +1,40 @@
-
-
-
-
-
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../domain/models/nodes.dart';
-import '../domain/models/report_doc.dart';
 import '../providers/report_editor_provider.dart';
 import '../services/image_services.dart';
 import 'report_preview_screen.dart';
 import '../ui/signature_capture.dart';
+import '../domain/models/report_doc.dart';
+
+/// ✅ Tracks disposal so we never reuse a disposed controller from a Map.
+class SafeTextController extends TextEditingController {
+  SafeTextController({String? text}) : super(text: text);
+
+  bool _disposed = false;
+  bool get isDisposed => _disposed;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+}
+
+/// ✅ Tracks disposal so we never reuse a disposed focus node from a Map.
+class SafeFocusNode extends FocusNode {
+  bool _disposed = false;
+  bool get isDisposed => _disposed;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+}
 
 class ReportEditorScreen extends StatefulWidget {
   const ReportEditorScreen({super.key});
@@ -23,21 +44,45 @@ class ReportEditorScreen extends StatefulWidget {
 }
 
 class _ReportEditorScreenState extends State<ReportEditorScreen> {
+  // ✅ TEMP FIX:
+  // Disable pruning + runtime disposal of controllers to stop:
+  // - "TextEditingController was used after being disposed"
+  // - "debugAssertNotDisposed"
+  // - "_dependents.isEmpty"
+  //
+  // Controllers will only be disposed when the screen itself disposes.
+  static const bool _enablePruning = false;
+
   // Keeps typing stable for Subject Info values.
-  final Map<String, TextEditingController> _subjectControllers = {};
+  final Map<String, SafeTextController> _subjectControllers = {};
+  final Map<String, SafeFocusNode> _subjectFocus = {};
   Map<String, String> _subjectErrors = {};
 
   // Keeps typing stable for ALL content fields.
-  final Map<String, TextEditingController> _contentControllers = {};
+  final Map<String, SafeTextController> _contentControllers = {};
+  final Map<String, SafeFocusNode> _contentFocus = {};
 
   // Keeps typing stable for Signer fields.
-  late final TextEditingController _roleTitleC;
-  late final TextEditingController _signerNameC;
-  late final TextEditingController _credentialsC;
-  late final TextEditingController _reportTitleC;
+  late final SafeTextController _roleTitleC;
+  late final SafeTextController _signerNameC;
+  late final SafeTextController _credentialsC;
+  late final SafeTextController _reportTitleC;
+
+  late final SafeFocusNode _roleTitleF;
+  late final SafeFocusNode _signerNameF;
+  late final SafeFocusNode _credentialsF;
+  late final SafeFocusNode _reportTitleF;
 
   bool _hintShown = false;
   bool _editorMode = false;
+
+  // Prevent pruning controllers while a build is still using them.
+  bool _pruneScheduled = false;
+
+  // Kept for later when _enablePruning=true, but disabled during TEMP FIX.
+  final List<SafeTextController> _pendingDisposeControllers = [];
+  final List<SafeFocusNode> _pendingDisposeFocus = [];
+  bool _disposeScheduled = false;
 
   // Spacing constants
   static const _pagePad = 16.0;
@@ -48,28 +93,65 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   @override
   void initState() {
     super.initState();
-    _roleTitleC = TextEditingController();
-    _signerNameC = TextEditingController();
-    _credentialsC = TextEditingController();
-    _reportTitleC = TextEditingController();
+    _roleTitleC = SafeTextController();
+    _signerNameC = SafeTextController();
+    _credentialsC = SafeTextController();
+    _reportTitleC = SafeTextController();
+
+    _roleTitleF = SafeFocusNode();
+    _signerNameF = SafeFocusNode();
+    _credentialsF = SafeFocusNode();
+    _reportTitleF = SafeFocusNode();
   }
 
   @override
   void dispose() {
+    // pending (won't be used while _enablePruning=false, but safe)
+    for (final c in _pendingDisposeControllers) {
+      if (!c.isDisposed) c.dispose();
+    }
+    for (final f in _pendingDisposeFocus) {
+      if (!f.isDisposed) f.dispose();
+    }
+    _pendingDisposeControllers.clear();
+    _pendingDisposeFocus.clear();
+
+    // Subject
     for (final c in _subjectControllers.values) {
-      c.dispose();
+      if (!c.isDisposed) c.dispose();
     }
+    for (final f in _subjectFocus.values) {
+      if (!f.isDisposed) f.dispose();
+    }
+
+    // Content
     for (final c in _contentControllers.values) {
-      c.dispose();
+      if (!c.isDisposed) c.dispose();
     }
-    _roleTitleC.dispose();
-    _signerNameC.dispose();
-    _credentialsC.dispose();
-    _reportTitleC.dispose();
+    for (final f in _contentFocus.values) {
+      if (!f.isDisposed) f.dispose();
+    }
+
+    // Signer + report
+    if (!_roleTitleC.isDisposed) _roleTitleC.dispose();
+    if (!_signerNameC.isDisposed) _signerNameC.dispose();
+    if (!_credentialsC.isDisposed) _credentialsC.dispose();
+    if (!_reportTitleC.isDisposed) _reportTitleC.dispose();
+
+    if (!_roleTitleF.isDisposed) _roleTitleF.dispose();
+    if (!_signerNameF.isDisposed) _signerNameF.dispose();
+    if (!_credentialsF.isDisposed) _credentialsF.dispose();
+    if (!_reportTitleF.isDisposed) _reportTitleF.dispose();
+
     super.dispose();
   }
 
   Color _accent(BuildContext context) => Theme.of(context).colorScheme.primary;
+
+  // ✅ Global unfocus to prevent IME holding old EditableText during structural changes
+  void _unfocusNow() {
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
 
   // =========================================================
   // ✅ Run provider mutations AFTER routes/sheets/dialogs close
@@ -81,33 +163,81 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     });
   }
 
-  // ---------------- Controllers sync ----------------
 
-  TextEditingController _subjectControllerFor(String key, String initial) {
-    return _subjectControllers.putIfAbsent(
-      key,
-      () => TextEditingController(text: initial),
-    );
+
+
+  void _disposeLater(ChangeNotifier n) {
+  // Wait for pop animation + any transition rebuilds
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      n.dispose();
+    });
+  });
+}
+
+
+  // ---------------- Controllers ensure + safe sync ----------------
+
+  /// ✅ IMPORTANT:
+  /// If the map somehow contains a disposed controller (hot-reload leftovers, old prune runs, etc),
+  /// we replace it immediately so TextField never receives a disposed controller.
+  SafeTextController _subjectControllerFor(String key, String initial) {
+    final existing = _subjectControllers[key];
+    if (existing == null || existing.isDisposed) {
+      final created = SafeTextController(text: initial);
+      _subjectControllers[key] = created;
+      return created;
+    }
+    return existing;
   }
 
+  SafeFocusNode _subjectFocusFor(String key) {
+    final existing = _subjectFocus[key];
+    if (existing == null || existing.isDisposed) {
+      final created = SafeFocusNode();
+      _subjectFocus[key] = created;
+      return created;
+    }
+    return existing;
+  }
+
+  SafeTextController _contentControllerFor(String key, String initial) {
+    final existing = _contentControllers[key];
+    if (existing == null || existing.isDisposed) {
+      final created = SafeTextController(text: initial);
+      _contentControllers[key] = created;
+      return created;
+    }
+    return existing;
+  }
+
+  SafeFocusNode _contentFocusFor(String key) {
+    final existing = _contentFocus[key];
+    if (existing == null || existing.isDisposed) {
+      final created = SafeFocusNode();
+      _contentFocus[key] = created;
+      return created;
+    }
+    return existing;
+  }
+
+  /// ✅ Only push model text into controller when the field is NOT focused.
   void _syncSubjectControllers(ReportEditorProvider vm) {
     for (final f in vm.subjectInfoDef.orderedFields) {
       final current = vm.subjectInfoValues.valueOf(f.key);
       final c = _subjectControllerFor(f.key, current);
-      if (c.text != current) c.text = current;
+      final focus = _subjectFocusFor(f.key);
+      if (!focus.hasFocus && c.text != current) {
+        c.text = current;
+      }
     }
   }
 
   void _syncReportTitleController(ReportEditorProvider vm) {
     final t = vm.doc.reportTitle;
-    if (_reportTitleC.text != t) _reportTitleC.text = t;
-  }
-
-  TextEditingController _contentControllerFor(String key, String initial) {
-    return _contentControllers.putIfAbsent(
-      key,
-      () => TextEditingController(text: initial),
-    );
+    if (!_reportTitleF.hasFocus && _reportTitleC.text != t) {
+      _reportTitleC.text = t;
+    }
   }
 
   void _syncContentControllers(ReportEditorProvider vm) {
@@ -115,7 +245,10 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
       for (final n in s.children) {
         if (n is ContentNode) {
           final c = _contentControllerFor(n.id, n.text);
-          if (c.text != n.text) c.text = n.text;
+          final focus = _contentFocusFor(n.id);
+          if (!focus.hasFocus && c.text != n.text) {
+            c.text = n.text;
+          }
         } else if (n is SectionNode) {
           walkSection(n);
         }
@@ -129,13 +262,13 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
 
   void _syncSignerControllers(ReportEditorProvider vm) {
     final role = vm.doc.signature.roleTitle;
-    if (_roleTitleC.text != role) _roleTitleC.text = role;
+    if (!_roleTitleF.hasFocus && _roleTitleC.text != role) _roleTitleC.text = role;
 
     final name = vm.doc.signature.name;
-    if (_signerNameC.text != name) _signerNameC.text = name;
+    if (!_signerNameF.hasFocus && _signerNameC.text != name) _signerNameC.text = name;
 
     final creds = vm.doc.signature.credentials;
-    if (_credentialsC.text != creds) _credentialsC.text = creds;
+    if (!_credentialsF.hasFocus && _credentialsC.text != creds) _credentialsC.text = creds;
   }
 
   Map<String, String> _validateSubjectInfo(ReportEditorProvider vm) {
@@ -153,34 +286,109 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
     return errors;
   }
 
-  void _pruneDeadContentControllers(ReportEditorProvider vm) {
-  final liveIds = <String>{};
+  // =========================================================
+  // ✅ Pruning / disposal (TEMP DISABLED via _enablePruning=false)
+  // =========================================================
 
-  void walk(SectionNode s) {
-    for (final n in s.children) {
-      if (n is ContentNode) liveIds.add(n.id);
-      if (n is SectionNode) walk(n);
+  void _schedulePruneControllers(ReportEditorProvider vm) {
+    if (!_enablePruning) return; // ✅ TEMP: disable pruning entirely
+    if (_pruneScheduled) return;
+    _pruneScheduled = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pruneScheduled = false;
+      if (!mounted) return;
+
+      _pruneDeadContentControllersNow(vm);
+      _pruneDeadSubjectControllersNow(vm);
+    });
+  }
+
+  void _scheduleDisposePending() {
+    if (!_enablePruning) return; // ✅ TEMP: disable disposal entirely
+    if (_disposeScheduled) return;
+    _disposeScheduled = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _disposeScheduled = false;
+        if (!mounted) return;
+
+        for (final c in _pendingDisposeControllers) {
+          if (!c.isDisposed) c.dispose();
+        }
+        _pendingDisposeControllers.clear();
+
+        for (final f in _pendingDisposeFocus) {
+          if (!f.isDisposed) f.dispose();
+        }
+        _pendingDisposeFocus.clear();
+      });
+    });
+  }
+
+  void _queueDispose(SafeTextController? c, SafeFocusNode? f) {
+    if (!_enablePruning) return; // ✅ TEMP
+    if (f?.hasFocus == true) {
+      f!.unfocus();
+    }
+    if (c != null) _pendingDisposeControllers.add(c);
+    if (f != null) _pendingDisposeFocus.add(f);
+  }
+
+  void _pruneDeadContentControllersNow(ReportEditorProvider vm) {
+    if (!_enablePruning) return; // ✅ TEMP
+
+    final liveIds = <String>{};
+
+    void walk(SectionNode s) {
+      for (final n in s.children) {
+        if (n is ContentNode) liveIds.add(n.id);
+        if (n is SectionNode) walk(n);
+      }
+    }
+
+    for (final r in vm.doc.roots) {
+      walk(r);
+    }
+
+    final dead = _contentControllers.keys.where((id) => !liveIds.contains(id)).toList();
+
+    for (final id in dead) {
+      final c = _contentControllers.remove(id);
+      final f = _contentFocus.remove(id);
+      _queueDispose(c, f);
+    }
+
+    if (_pendingDisposeControllers.isNotEmpty || _pendingDisposeFocus.isNotEmpty) {
+      _scheduleDisposePending();
     }
   }
 
-  for (final r in vm.doc.roots) {
-    walk(r);
-  }
+  void _pruneDeadSubjectControllersNow(ReportEditorProvider vm) {
+    if (!_enablePruning) return; // ✅ TEMP
 
-  _contentControllers.removeWhere((id, controller) {
-    if (!liveIds.contains(id)) {
-      controller.dispose();
-      return true;
+    final liveKeys = vm.subjectInfoDef.orderedFields.map((f) => f.key).toSet();
+    final dead = _subjectControllers.keys.where((k) => !liveKeys.contains(k)).toList();
+
+    for (final k in dead) {
+      final c = _subjectControllers.remove(k);
+      final f = _subjectFocus.remove(k);
+      _queueDispose(c, f);
     }
-    return false;
-  });
-}
 
+    if (_pendingDisposeControllers.isNotEmpty || _pendingDisposeFocus.isNotEmpty) {
+      _scheduleDisposePending();
+    }
+  }
 
   // =========================
   // ✅ Mode switching (safe)
   // =========================
   void _toggleMode(ReportEditorProvider vm) {
+    _unfocusNow();
     final goingToFormMode = _editorMode == true;
     if (goingToFormMode) {
       vm.ensureFormReady();
@@ -190,46 +398,45 @@ class _ReportEditorScreenState extends State<ReportEditorScreen> {
   }
 
   // ---------------- Dialog helpers ----------------
-Future<String?> _promptText(
-  BuildContext context,
-  String title, {
-  String hint = 'Type…',
-}) async {
-  final controller = TextEditingController();
 
-  final result = await showDialog<String>(
-    context: context,
-    builder: (dialogContext) {
-      return AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: hint,
-            border: const OutlineInputBorder(),
+  Future<String?> _promptText(
+    BuildContext context,
+    String title, {
+    String hint = 'Type…',
+  }) async {
+    final controller = SafeTextController();
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: hint,
+              border: const OutlineInputBorder(),
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: const Text('OK'),
-          ),
-        ],
-      );
-    },
-  );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, controller.text),
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
 
-  // delay disposal (fixes crash)
-  Future.microtask(() => controller.dispose());
+_disposeLater(controller);
 
-  return result;
-}
-
+    return result;
+  }
 
   Future<bool?> askTemplateSaveMode(BuildContext context) {
     return showDialog<bool>(
@@ -261,7 +468,7 @@ Future<String?> _promptText(
   // ---------------- Subject Info dialogs / sheets ----------------
 
   Future<void> _addSubjectFieldDialog(ReportEditorProvider vm) async {
-    final titleC = TextEditingController();
+    final titleC = SafeTextController();
     bool required = false;
 
     final res = await showDialog<bool>(
@@ -306,7 +513,7 @@ Future<String?> _promptText(
     );
 
     final titleText = titleC.text.trim();
-    titleC.dispose();
+_disposeLater(titleC);
 
     if (res != true) return;
 
@@ -315,6 +522,7 @@ Future<String?> _promptText(
         title: titleText.isEmpty ? 'New field' : titleText,
         required: required,
       );
+      _schedulePruneControllers(vm);
       if (!mounted) return;
       setState(() => _subjectErrors = _validateSubjectInfo(vm));
     });
@@ -334,180 +542,196 @@ Future<String?> _promptText(
     );
 
     if (!mounted) return;
+    _schedulePruneControllers(vm);
     setState(() => _subjectErrors = _validateSubjectInfo(vm));
   }
 
-  // ---------------- Global Add (structure) ----------------
-Future<void> _showGlobalAddSheet(BuildContext context, ReportEditorProvider vm) async {
-  final hasSelection = vm.selectedNodeId != null;
-  final selectedIsSection = vm.selectedIsSection;
+  // ---------------- global Add (structure) ----------------
 
-  final action = await showModalBottomSheet<String>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const ListTile(title: Text('Structure')),
-          ListTile(
-            leading: const Icon(Icons.view_agenda_outlined),
-            title: const Text('Add top-level section'),
-            onTap: () => Navigator.pop(sheetContext, 'add_top'),
-          ),
-          if (hasSelection) ...[
+  Future<void> _showGlobalAddSheet(BuildContext context, ReportEditorProvider vm) async {
+    final hasSelection = vm.selectedNodeId != null;
+    final selectedIsSection = vm.selectedIsSection;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('Structure')),
             ListTile(
-              leading: const Icon(Icons.library_add_outlined),
-              title: const Text('Add same-level section'),
-              onTap: () => Navigator.pop(sheetContext, 'add_same'),
+              leading: const Icon(Icons.view_agenda_outlined),
+              title: const Text('Add top-level section'),
+              onTap: () => Navigator.pop(sheetContext, 'add_top'),
             ),
-            if (selectedIsSection)
+            if (hasSelection) ...[
               ListTile(
-                leading: const Icon(Icons.layers_outlined),
-                title: const Text('Wrap selected section'),
-                onTap: () => Navigator.pop(sheetContext, 'wrap'),
+                leading: const Icon(Icons.library_add_outlined),
+                title: const Text('Add same-level section'),
+                onTap: () => Navigator.pop(sheetContext, 'add_same'),
               ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete selected'),
-              onTap: () => Navigator.pop(sheetContext, 'delete'),
+              if (selectedIsSection)
+                ListTile(
+                  leading: const Icon(Icons.layers_outlined),
+                  title: const Text('Wrap selected section'),
+                  onTap: () => Navigator.pop(sheetContext, 'wrap'),
+                ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('Delete selected'),
+                onTap: () => Navigator.pop(sheetContext, 'delete'),
+              ),
+            ],
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    if (action == null) return;
+
+    if (action == 'add_top') {
+      final title = await _promptText(context, 'New top-level section');
+      if (!mounted) return;
+
+      if (title != null && title.trim().isNotEmpty) {
+        _unfocusNow();
+        _afterClose(() {
+          vm.addTopLevelSection(title.trim());
+          _schedulePruneControllers(vm);
+        });
+      }
+      return;
+    }
+
+    if (!hasSelection) return;
+
+    if (action == 'add_same') {
+      final title = await _promptText(context, 'New same-level section');
+      if (!mounted) return;
+
+      if (title != null && title.trim().isNotEmpty) {
+        _unfocusNow();
+        _afterClose(() {
+          vm.addSameLevelSection(title.trim());
+          _schedulePruneControllers(vm);
+        });
+      }
+      return;
+    }
+
+    if (action == 'wrap') {
+      final title = await _promptText(context, 'Wrapper section title', hint: 'e.g., Findings');
+      if (!mounted) return;
+
+      if (title != null && title.trim().isNotEmpty) {
+        _unfocusNow();
+        _afterClose(() {
+          vm.wrapSelectedSection(title.trim());
+          _schedulePruneControllers(vm);
+        });
+      }
+      return;
+    }
+
+    if (action == 'delete') {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Delete selected?'),
+          content: const Text('This cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Delete'),
             ),
           ],
-          const SizedBox(height: 12),
-        ],
-      ),
-    ),
-  );
+        ),
+      );
 
-  // ✅ context may be invalid after await
-  if (!mounted) return;
-
-  if (action == null) return;
-
-  if (action == 'add_top') {
-    final title = await _promptText(context, 'New top-level section');
-
-    if (!mounted) return; // ✅ after await
-
-    if (title != null && title.trim().isNotEmpty) {
-      _afterClose(() => vm.addTopLevelSection(title.trim()));
+      if (!mounted) return;
+      if (ok == true) {
+        _unfocusNow();
+        _afterClose(() {
+          vm.deleteSelected();
+          _schedulePruneControllers(vm);
+        });
+      }
+      return;
     }
-    return;
   }
-
-  if (!hasSelection) return;
-
-  if (action == 'add_same') {
-    final title = await _promptText(context, 'New same-level section');
-
-    if (!mounted) return; // ✅ after await
-
-    if (title != null && title.trim().isNotEmpty) {
-      _afterClose(() => vm.addSameLevelSection(title.trim()));
-    }
-    return;
-  }
-
-  if (action == 'wrap') {
-    final title = await _promptText(
-      context,
-      'Wrapper section title',
-      hint: 'e.g., Findings',
-    );
-
-    if (!mounted) return; // ✅ after await
-
-    if (title != null && title.trim().isNotEmpty) {
-      _afterClose(() => vm.wrapSelectedSection(title.trim()));
-    }
-    return;
-  }
-
-  if (action == 'delete') {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete selected?'),
-        content: const Text('This cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-
-    if (!mounted) return; // ✅ after await
-
-    if (ok == true) _afterClose(vm.deleteSelected);
-    return;
-  }
-}
 
   // ---------------- Add Here (context) ----------------
-Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) async {
-  if (vm.selectedNodeId == null) return;
 
-  final canSub = vm.canAddSubsectionHere;
-  final canContent = vm.canAddContentHere;
+  Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) async {
+    if (vm.selectedNodeId == null) return;
 
-  final action = await showModalBottomSheet<String>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const ListTile(title: Text('Add here')),
-          if (canSub)
-            ListTile(
-              leading: const Icon(Icons.subdirectory_arrow_right),
-              title: const Text('Add subsection'),
-              onTap: () => Navigator.pop(sheetContext, 'subsection'),
-            ),
-          if (canContent)
-            ListTile(
-              leading: const Icon(Icons.notes_outlined),
-              title: const Text('Add content'),
-              onTap: () => Navigator.pop(sheetContext, 'content'),
-            ),
-          if (!canSub && !canContent)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Text('Nothing can be added here.'),
-            ),
-          const SizedBox(height: 12),
-        ],
+    final canSub = vm.canAddSubsectionHere;
+    final canContent = vm.canAddContentHere;
+
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('Add here')),
+            if (canSub)
+              ListTile(
+                leading: const Icon(Icons.subdirectory_arrow_right),
+                title: const Text('Add subsection'),
+                onTap: () => Navigator.pop(sheetContext, 'subsection'),
+              ),
+            if (canContent)
+              ListTile(
+                leading: const Icon(Icons.notes_outlined),
+                title: const Text('Add content'),
+                onTap: () => Navigator.pop(sheetContext, 'content'),
+              ),
+            if (!canSub && !canContent)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Text('Nothing can be added here.'),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
-    ),
-  );
+    );
 
-  // ✅ context may be invalid after await
-  if (!mounted) return;
+    if (!mounted) return;
+    if (action == null) return;
 
-  if (action == null) return;
+    if (action == 'subsection') {
+      final title = await _promptText(context, 'New subsection');
+      if (!mounted) return;
 
-  if (action == 'subsection') {
-    final title = await _promptText(context, 'New subsection');
-
-    if (!mounted) return; // ✅ after await
-
-    if (title != null && title.trim().isNotEmpty) {
-      _afterClose(() => vm.addHereSubsection(title.trim()));
+      if (title != null && title.trim().isNotEmpty) {
+        _unfocusNow();
+        _afterClose(() {
+          vm.addHereSubsection(title.trim());
+          _schedulePruneControllers(vm);
+        });
+      }
+      return;
     }
-    return;
-  }
 
-  if (action == 'content') {
-    _afterClose(vm.addHereContent);
-    return;
+    if (action == 'content') {
+      _unfocusNow();
+      _afterClose(() {
+        vm.addHereContent();
+        _schedulePruneControllers(vm);
+      });
+      return;
+    }
   }
-}
 
   // ---------------- Build ----------------
 
@@ -517,9 +741,10 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
 
     _syncSubjectControllers(vm);
     _syncContentControllers(vm);
-    _pruneDeadContentControllers(vm); 
     _syncSignerControllers(vm);
     _syncReportTitleController(vm);
+
+    _schedulePruneControllers(vm);
 
     if (_editorMode && !_hintShown && vm.doc.roots.isNotEmpty && vm.selectedNodeId == null) {
       _hintShown = true;
@@ -576,9 +801,11 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
                   'Template name',
                   hint: 'e.g., Upper GI Template',
                 );
+                if (!mounted) return;
                 if (name == null || name.trim().isEmpty) return;
 
                 final includeContent = await askTemplateSaveMode(context);
+                if (!mounted) return;
                 if (includeContent == null) return;
 
                 await vm.saveAsTemplate(
@@ -601,8 +828,14 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
                 onPressed: () async {
                   if (!hasSelection) {
                     final title = await _promptText(context, 'New top-level section');
+                    if (!mounted) return;
+
                     if (title != null && title.trim().isNotEmpty) {
-                      _afterClose(() => vm.addTopLevelSection(title.trim()));
+                      _unfocusNow();
+                      _afterClose(() {
+                        vm.addTopLevelSection(title.trim());
+                        _schedulePruneControllers(vm);
+                      });
                     }
                   } else {
                     await _showGlobalAddSheet(context, vm);
@@ -614,7 +847,10 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
           : null,
       floatingActionButtonLocation: _editorMode ? FloatingActionButtonLocation.endFloat : null,
       body: GestureDetector(
-        onTap: vm.clearSelection,
+        onTap: () {
+          _unfocusNow();
+          vm.clearSelection();
+        },
         child: ListView(
           padding: const EdgeInsets.all(_pagePad),
           children: [
@@ -644,7 +880,8 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
                             children: [
                               const Icon(Icons.edit_note_outlined, size: 42, color: Colors.grey),
                               const SizedBox(height: 12),
-                              const Text('No sections yet', style: TextStyle(fontWeight: FontWeight.w600)),
+                              const Text('No sections yet',
+                                  style: TextStyle(fontWeight: FontWeight.w600)),
                               const SizedBox(height: 6),
                               const Text(
                                 'Switch to Edit Mode to start creating your template.',
@@ -726,6 +963,7 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
 
     final node = contentChildren.first;
     final c = _contentControllerFor(node.id, node.text);
+    final f = _contentFocusFor(node.id);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: _bigGap),
@@ -736,7 +974,9 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
           Padding(
             padding: EdgeInsets.only(left: leftPad),
             child: TextField(
+              key: ValueKey('content-form-${node.id}'),
               controller: c,
+              focusNode: f,
               maxLines: null,
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
@@ -755,7 +995,9 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
     return _card(
       title: 'Report',
       child: TextField(
+        key: const ValueKey('report-title'),
         controller: _reportTitleC,
+        focusNode: _reportTitleF,
         decoration: const InputDecoration(
           labelText: 'Report Title / Topic',
           hintText: 'e.g., Upper GI Endoscopy Report',
@@ -790,12 +1032,15 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
     final fieldWidgets = fields.map((f) {
       final current = vm.subjectInfoValues.valueOf(f.key);
       final c = _subjectControllerFor(f.key, current);
+      final focus = _subjectFocusFor(f.key);
       final err = _subjectErrors[f.key];
 
       return Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: TextField(
+          key: ValueKey('subject-${f.key}'),
           controller: c,
+          focusNode: focus,
           decoration: InputDecoration(
             labelText: f.required ? '${f.title} *' : f.title,
             errorText: err,
@@ -952,30 +1197,35 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
             Padding(
               padding: const EdgeInsets.only(left: 24),
               child: Row(
-  children: [
-    if (showAddHere)
-      Flexible(
-        fit: FlexFit.loose,
-        child: FilledButton.icon(
-          onPressed: () => _showAddHereSheet(context, vm),
-          icon: const Icon(Icons.add),
-          label: const Text('Add here'),
-        ),
-      ),
-    if (showDeleteContent) ...[
-      const SizedBox(width: 8),
-      Flexible(
-        fit: FlexFit.loose,
-        child: OutlinedButton.icon(
-          onPressed: () => _afterClose(vm.deleteContentForSelectedSection),
-          icon: const Icon(Icons.delete_outline),
-          label: const Text('Delete content'),
-        ),
-      ),
-    ],
-  ],
-)
-
+                children: [
+                  if (showAddHere)
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: FilledButton.icon(
+                        onPressed: () => _showAddHereSheet(context, vm),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add here'),
+                      ),
+                    ),
+                  if (showDeleteContent) ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          _unfocusNow();
+                          _afterClose(() {
+                            vm.deleteContentForSelectedSection();
+                            _schedulePruneControllers(vm);
+                          });
+                        },
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Delete content'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           const SizedBox(height: 8),
           if (!section.collapsed)
@@ -983,29 +1233,22 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
               if (child is ContentNode) {
                 final contentLeft = sectionIndent + 24;
                 final c = _contentControllerFor(child.id, child.text);
+                final f = _contentFocusFor(child.id);
 
                 return Padding(
                   padding: EdgeInsets.only(left: contentLeft, top: 8),
-                  child: Material(
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => vm.selectNode(section.id),
-                      child: Padding(
-                        padding: const EdgeInsets.all(6),
-                        child: TextField(
-                          controller: c,
-                          minLines: 2,
-                          maxLines: 6,
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            hintText: 'Enter text…',
-                          ),
-                          onChanged: (v) => vm.updateContent(child.id, v),
-                        ),
-                      ),
+                  child: TextField(
+                    key: ValueKey('content-outline-${child.id}'),
+                    controller: c,
+                    focusNode: f,
+                    minLines: 2,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'Enter text…',
                     ),
+                    onTap: () => vm.selectNode(section.id),
+                    onChanged: (v) => vm.updateContent(child.id, v),
                   ),
                 );
               }
@@ -1029,6 +1272,7 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
       showDragHandle: true,
       builder: (sheetContext) => _SectionEditSheet(section: section),
     );
+    if (!mounted) return;
     if (res == null) return;
 
     _afterClose(() {
@@ -1038,6 +1282,7 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
       if (res.style != null) {
         vm.updateSectionStyle(section.id, res.style!);
       }
+      _schedulePruneControllers(vm);
     });
   }
 
@@ -1076,32 +1321,38 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
     return Column(
       children: [
         TextField(
+          key: const ValueKey('signer-role'),
           decoration: const InputDecoration(
             labelText: 'Title (e.g., Reporter, Endoscopist, Radiologist)',
             border: OutlineInputBorder(),
             isDense: true,
           ),
           controller: _roleTitleC,
+          focusNode: _roleTitleF,
           onChanged: (v) => vm.updateSigner(roleTitle: v),
         ),
         const SizedBox(height: _gap),
         TextField(
+          key: const ValueKey('signer-name'),
           decoration: const InputDecoration(
             labelText: 'Name',
             border: OutlineInputBorder(),
             isDense: true,
           ),
           controller: _signerNameC,
+          focusNode: _signerNameF,
           onChanged: (v) => vm.updateSigner(name: v),
         ),
         const SizedBox(height: _gap),
         TextField(
+          key: const ValueKey('signer-creds'),
           decoration: const InputDecoration(
             labelText: 'Credentials (optional)',
             border: OutlineInputBorder(),
             isDense: true,
           ),
           controller: _credentialsC,
+          focusNode: _credentialsF,
           onChanged: (v) => vm.updateSigner(credentials: v),
         ),
         const SizedBox(height: _gap),
@@ -1114,6 +1365,8 @@ Future<void> _showAddHereSheet(BuildContext context, ReportEditorProvider vm) as
                     context,
                     MaterialPageRoute(builder: (_) => const SignatureCaptureScreen()),
                   );
+                  if (!mounted) return;
+
                   if (path != null) {
                     _afterClose(() => vm.setSignatureFilePath(path));
                   }
@@ -1190,7 +1443,7 @@ class _SubjectFieldsEditor extends StatefulWidget {
 
 class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
   void _renameDialog(String fieldKey, String currentTitle) {
-    final c = TextEditingController(text: currentTitle);
+    final c = SafeTextController(text: currentTitle);
 
     showDialog(
       context: context,
@@ -1222,7 +1475,9 @@ class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
           ),
         ],
       ),
-    ).then((_) => c.dispose());
+    ).then((_) {
+      if (!c.isDisposed) c.dispose();
+    });
   }
 
   @override
@@ -1230,30 +1485,14 @@ class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
     final vm = widget.vm;
     final fields = vm.subjectInfoDef.orderedFields;
 
-    // Build the subject fields editor using a Column.  The reorderable list
-    // view is wrapped in a ConstrainedBox to ensure it receives a bounded
-    // height when displayed in a bottom sheet.  Without this constraint the
-    // list would attempt to expand vertically without limit, causing the
-    // framework to complain that a Flexible child of a Column has unbounded
-    // constraints.  By limiting the maximum height based on the number of
-    // fields and the screen height, we ensure the widget always has a finite
-    // height and can scroll internally if necessary.
     final screenHeight = MediaQuery.of(context).size.height;
-    // Estimate a sensible row height for each field.  ListTile's default
-    // height is approximately 56 logical pixels; add extra space for
-    // padding/spacers.
     const double rowHeight = 60.0;
     final double listHeight = fields.length * rowHeight;
-    // Limit the list height to at most 50% of the available screen height.
     final double maxHeight = screenHeight * 0.5;
     final double constrainedHeight = listHeight < maxHeight ? listHeight : maxHeight;
 
     return Column(
-      // Let the Column expand vertically so its children can receive
-      // constraints from the bottom sheet.  Without setting mainAxisSize to
-      // max, a Flexible/ConstrainedBox inside a Column with min size can
-      // encounter unbounded height constraints.
-      mainAxisSize: MainAxisSize.max,
+      mainAxisSize: MainAxisSize.min, // ✅ prevent bottom-sheet overflow
       children: [
         const ListTile(
           title: Text('Subject Fields'),
@@ -1261,9 +1500,6 @@ class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
         ),
         ConstrainedBox(
           constraints: BoxConstraints(
-            // Provide both a max and min height.  The max height ensures the
-            // list doesn't grow indefinitely, while the min height ensures
-            // there is space for at least one item when fields is empty.
             maxHeight: constrainedHeight,
             minHeight: 0,
           ),
@@ -1277,7 +1513,7 @@ class _SubjectFieldsEditorState extends State<_SubjectFieldsEditor> {
             itemBuilder: (_, i) {
               final f = fields[i];
               return ListTile(
-                key: ValueKey('${f.key}_$i'),
+                key: ValueKey(f.key),
                 title: Text(f.title),
                 subtitle: Text(f.isSystem ? 'System field' : 'Custom field'),
                 leading: const Icon(Icons.drag_handle),
@@ -1339,7 +1575,7 @@ class _SectionEditSheet extends StatefulWidget {
 }
 
 class _SectionEditSheetState extends State<_SectionEditSheet> {
-  late final TextEditingController _title;
+  late final SafeTextController _title;
   late HeadingLevel _level;
   late bool _bold;
   late TitleAlign _align;
@@ -1347,7 +1583,7 @@ class _SectionEditSheetState extends State<_SectionEditSheet> {
   @override
   void initState() {
     super.initState();
-    _title = TextEditingController(text: widget.section.title);
+    _title = SafeTextController(text: widget.section.title);
     _level = widget.section.style.level;
     _bold = widget.section.style.bold;
     _align = widget.section.style.align;
@@ -1355,7 +1591,7 @@ class _SectionEditSheetState extends State<_SectionEditSheet> {
 
   @override
   void dispose() {
-    _title.dispose();
+    if (!_title.isDisposed) _title.dispose();
     super.dispose();
   }
 
@@ -1471,17 +1707,14 @@ class _ImagesManagerState extends State<_ImagesManager> {
     final double computedHeight =
         rowCount <= 0 ? 0 : (rowCount * tileHeight + (rowCount - 1) * 8.0);
     final double maxGridHeight = MediaQuery.of(context).size.height * 0.45;
-    final double gridHeight =
-        computedHeight < maxGridHeight ? computedHeight : maxGridHeight;
+    final double gridHeight = computedHeight < maxGridHeight ? computedHeight : maxGridHeight;
 
     return SafeArea(
       child: ListView(
-        // ListView prevents RenderFlex overflow in bottom sheets
         padding: EdgeInsets.zero,
         shrinkWrap: true,
         children: [
           const ListTile(title: Text('Images')),
-
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: SegmentedButton<ImagePlacementChoice>(
@@ -1506,14 +1739,12 @@ class _ImagesManagerState extends State<_ImagesManager> {
               },
             ),
           ),
-
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text('Max images in this mode: ${vm.doc.maxImages}'),
           ),
           const SizedBox(height: 12),
-
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
@@ -1524,9 +1755,7 @@ class _ImagesManagerState extends State<_ImagesManager> {
                       try {
                         final files = await _imageService.pickMultiFromGallery();
                         if (!mounted) return;
-
                         if (files.isEmpty) return;
-
                         vm.addImages(files.map((f) => f.path).toList());
                         if (mounted) setState(() {});
                       } catch (e) {
@@ -1544,9 +1773,7 @@ class _ImagesManagerState extends State<_ImagesManager> {
                       try {
                         final file = await _imageService.pickFromCamera();
                         if (!mounted) return;
-
                         if (file == null) return;
-
                         vm.addImages([file.path]);
                         if (mounted) setState(() {});
                       } catch (e) {
@@ -1560,9 +1787,7 @@ class _ImagesManagerState extends State<_ImagesManager> {
               ],
             ),
           ),
-
           const SizedBox(height: 16),
-
           if (vm.doc.images.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -1576,12 +1801,11 @@ class _ImagesManagerState extends State<_ImagesManager> {
                   maxHeight: gridHeight <= 0 ? 1 : gridHeight,
                 ),
                 child: GridView.builder(
-                  // Important: GridView must NOT try to scroll inside sheet
                   physics: const NeverScrollableScrollPhysics(),
                   shrinkWrap: true,
                   itemCount: itemCount,
-                  gridDelegate:  SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: crossAxisCount,
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
                     mainAxisSpacing: 8,
                     crossAxisSpacing: 8,
                   ),
@@ -1619,7 +1843,6 @@ class _ImagesManagerState extends State<_ImagesManager> {
                 ),
               ),
             ),
-
           const SizedBox(height: 16),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),

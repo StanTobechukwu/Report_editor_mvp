@@ -1,5 +1,6 @@
 import 'dart:math';
-import 'package:flutter/foundation.dart';
+
+import 'package:flutter/material.dart';
 
 import '../../../core/utils/ids.dart';
 import '../../../core/utils/time.dart';
@@ -27,6 +28,53 @@ class ReportEditorProvider extends ChangeNotifier {
     required this.templatesRepo,
   }) {
     newReport();
+  }
+
+  // =========================================================
+  // ✅ CENTRAL CONTROLLER STORE (CONTENT ONLY)
+  // Provider owns lifecycle so deleted nodes can't crash UI.
+  // =========================================================
+  final Map<String, TextEditingController> _contentControllers = {};
+
+  TextEditingController contentControllerFor(String contentId, String initial) {
+    return _contentControllers.putIfAbsent(
+      contentId,
+      () => TextEditingController(text: initial),
+    );
+  }
+
+  void _syncControllerText(String id, String latest) {
+    final c = _contentControllers[id];
+    if (c == null) return;
+    if (c.text != latest) c.text = latest;
+  }
+
+  void _pruneDeadContentControllers() {
+    final liveIds = <String>{};
+
+    void walkSection(SectionNode s) {
+      for (final n in s.children) {
+        if (n is ContentNode) liveIds.add(n.id);
+        if (n is SectionNode) walkSection(n);
+      }
+    }
+
+    for (final r in _doc.roots) {
+      walkSection(r);
+    }
+
+    _contentControllers.removeWhere((id, controller) {
+      if (!liveIds.contains(id)) {
+        controller.dispose();
+        return true;
+      }
+      return false;
+    });
+  }
+
+  void _commit() {
+    _pruneDeadContentControllers();
+    notifyListeners();
   }
 
   // =========================
@@ -105,7 +153,7 @@ class ReportEditorProvider extends ChangeNotifier {
   void newReport() {
     _doc = _newEmptyDoc();
     _selectedNodeId = null;
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   void newReportFromTemplate(TemplateDoc template) {
@@ -132,7 +180,7 @@ class ReportEditorProvider extends ChangeNotifier {
     );
 
     _selectedNodeId = null;
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   Future<void> save() async {
@@ -144,7 +192,7 @@ class ReportEditorProvider extends ChangeNotifier {
   Future<void> loadById(String reportId) async {
     _doc = await repo.loadReport(reportId);
     _selectedNodeId = null;
-    notifyListeners();
+    _commit(); // ✅ prune + notify (structure changed)
   }
 
   Future<void> loadTemplateAndStartReport(String templateId) async {
@@ -179,7 +227,7 @@ class ReportEditorProvider extends ChangeNotifier {
         ),
         updatedAtIso: nowIso(),
       );
-      notifyListeners();
+      _commit();
       return;
     }
 
@@ -193,7 +241,7 @@ class ReportEditorProvider extends ChangeNotifier {
       ),
       updatedAtIso: nowIso(),
     );
-    notifyListeners();
+    _commit();
   }
 
   // =========================
@@ -374,10 +422,12 @@ class ReportEditorProvider extends ChangeNotifier {
   // =========================
 
   SectionNode _hydrateTemplateSectionForForm(SectionNode s) {
-    final sectionKids = s.children.whereType<SectionNode>().toList(growable: false);
+    final sectionKids =
+        s.children.whereType<SectionNode>().toList(growable: false);
     if (sectionKids.isNotEmpty) {
       return s.copyWith(
-        children: sectionKids.map(_hydrateTemplateSectionForForm).toList(growable: false),
+        children:
+            sectionKids.map(_hydrateTemplateSectionForForm).toList(growable: false),
         collapsed: false,
       );
     }
@@ -392,8 +442,10 @@ class ReportEditorProvider extends ChangeNotifier {
     return s.copyWith(children: [content], collapsed: false);
   }
 
-  bool _sectionHasSectionChildren(SectionNode s) => s.children.any((n) => n is SectionNode);
-  bool _sectionHasContentChild(SectionNode s) => s.children.any((n) => n is ContentNode);
+  bool _sectionHasSectionChildren(SectionNode s) =>
+      s.children.any((n) => n is SectionNode);
+  bool _sectionHasContentChild(SectionNode s) =>
+      s.children.any((n) => n is ContentNode);
 
   // =========================
   // Tree: IDs
@@ -415,7 +467,7 @@ class ReportEditorProvider extends ChangeNotifier {
       roots: [..._doc.roots, sec],
       updatedAtIso: nowIso(),
     );
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   void addSameLevelSection(String title) {
@@ -432,7 +484,7 @@ class ReportEditorProvider extends ChangeNotifier {
 
     final nextRoots = _insertSibling(_doc.roots, effectiveTargetId, newSec);
     _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   void wrapSelectedSection(String wrapperTitle) {
@@ -456,7 +508,7 @@ class ReportEditorProvider extends ChangeNotifier {
 
     final nextRoots = _replaceNode(_doc.roots, targetId, wrapper);
     _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   void deleteSelected() {
@@ -466,7 +518,7 @@ class ReportEditorProvider extends ChangeNotifier {
     final nextRoots = _deleteNode(_doc.roots, targetId);
     _doc = _doc.copyWith(roots: nextRoots, updatedAtIso: nowIso());
     _selectedNodeId = null;
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   // =========================
@@ -491,7 +543,7 @@ class ReportEditorProvider extends ChangeNotifier {
       ),
       updatedAtIso: nowIso(),
     );
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   void addHereContent({String initialText = ''}) {
@@ -516,14 +568,17 @@ class ReportEditorProvider extends ChangeNotifier {
         targetId,
         (s) {
           // ✅ Insert content BEFORE subsections (intro content)
-          final nextChildren = <Node>[newTxt, ...s.children.whereType<SectionNode>()];
+          final nextChildren = <Node>[
+            newTxt,
+            ...s.children.whereType<SectionNode>(),
+          ];
           return s.copyWith(children: nextChildren, collapsed: false);
         },
       ),
       updatedAtIso: nowIso(),
     );
 
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   // =========================
@@ -539,7 +594,7 @@ class ReportEditorProvider extends ChangeNotifier {
       ),
       updatedAtIso: nowIso(),
     );
-    notifyListeners();
+    _commit(); // ✅ prune + notify (structure-ish)
   }
 
   void renameSection(String sectionId, String title) {
@@ -574,6 +629,7 @@ class ReportEditorProvider extends ChangeNotifier {
       roots: _updateContentTree(_doc.roots, contentId, text),
       updatedAtIso: nowIso(),
     );
+    _syncControllerText(contentId, text);
     notifyListeners();
   }
 
@@ -599,7 +655,7 @@ class ReportEditorProvider extends ChangeNotifier {
     );
 
     _selectedNodeId = null;
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   bool get selectedSectionHasContent {
@@ -631,7 +687,7 @@ class ReportEditorProvider extends ChangeNotifier {
       updatedAtIso: nowIso(),
     );
 
-    notifyListeners();
+    _commit(); // ✅ prune + notify
   }
 
   // =========================
@@ -706,64 +762,57 @@ class ReportEditorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // =========================================================
+  // ✅ Ensure form rules (container vs leaf content)
+  // This is structural => commit
+  // =========================================================
+  void ensureFormReady() {
+    bool changed = false;
 
+    SectionNode fix(SectionNode s) {
+      final hasSectionChildren = s.children.any((n) => n is SectionNode);
+      final contentNodes = s.children.whereType<ContentNode>().toList();
 
+      // container section: allow optional intro content (0 or 1), plus subsections
+      if (hasSectionChildren) {
+        // keep at most ONE content node (intro)
+        final intro = contentNodes.isNotEmpty ? contentNodes.first : null;
+        final subsections = s.children.whereType<SectionNode>().toList();
 
+        final nextChildren = <Node>[
+          if (intro != null) intro,
+          ...subsections.map(fix),
+        ];
 
-void ensureFormReady() {
-  bool changed = false;
+        if (nextChildren.length != s.children.length) changed = true;
+        return s.copyWith(children: nextChildren);
+      }
 
-  SectionNode fix(SectionNode s) {
-    final hasSectionChildren = s.children.any((n) => n is SectionNode);
-    final contentNodes = s.children.whereType<ContentNode>().toList();
+      // leaf section: MUST have exactly ONE content
+      if (contentNodes.isEmpty) {
+        changed = true;
+        final newTxt = ContentNode(id: _id('txt'), text: '', indent: s.indent);
+        return s.copyWith(children: [newTxt], collapsed: false);
+      }
 
-    // container section: allow optional intro content (0 or 1), plus subsections
-    if (hasSectionChildren) {
-      // keep at most ONE content node (intro)
-      final intro = contentNodes.isNotEmpty ? contentNodes.first : null;
-      final subsections = s.children.whereType<SectionNode>().toList();
+      if (contentNodes.length > 1 || s.children.length != 1) {
+        changed = true;
+        return s.copyWith(children: [contentNodes.first], collapsed: false);
+      }
 
-      final nextChildren = <Node>[
-        if (intro != null) intro,
-        ...subsections.map(fix),
-      ];
-
-      if (nextChildren.length != s.children.length) changed = true;
-      return s.copyWith(children: nextChildren);
+      return s;
     }
 
-    // leaf section: MUST have exactly ONE content
-    if (contentNodes.isEmpty) {
-      changed = true;
-      final newTxt = ContentNode(id: _id('txt'), text: '', indent: s.indent);
-      return s.copyWith(children: [newTxt], collapsed: false);
-    }
+    final nextRoots = _doc.roots.map(fix).toList(growable: false);
 
-    if (contentNodes.length > 1 || s.children.length != 1) {
-      changed = true;
-      return s.copyWith(children: [contentNodes.first], collapsed: false);
-    }
+    if (!changed) return;
 
-    return s;
+    _doc = _doc.copyWith(
+      roots: nextRoots,
+      updatedAtIso: nowIso(),
+    );
+    _commit(); // ✅ prune + notify
   }
-
-  final nextRoots = _doc.roots.map(fix).toList(growable: false);
-
-  if (!changed) return;
-
-  _doc = _doc.copyWith(
-    roots: nextRoots,
-    updatedAtIso: nowIso(),
-  );
-  notifyListeners();
-}
-
-
-
-
-
-
-
 
   // =========================
   // Tree helpers
@@ -979,5 +1028,16 @@ void ensureFormReady() {
     }
 
     return shift(node) as SectionNode;
+  }
+
+  // =========================
+  // Cleanup
+  // =========================
+  @override
+  void dispose() {
+    for (final c in _contentControllers.values) {
+      c.dispose();
+    }
+    super.dispose();
   }
 }
